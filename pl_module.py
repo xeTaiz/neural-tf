@@ -82,7 +82,7 @@ class NeuralTransferFunction(LightningModule):
         render_gt = batch['render'].to(dtype)
         tf_pts    = batch['tf_pts']
         if torch.is_tensor(tf_pts): tf_pts = [t for t in tf_pts]
-        vols = torch.stack([self.volumes[n[:-5]]['vol'] for n in batch['name']]).to(dtype).to(render_gt.device)
+        vols = torch.stack([self.volumes[n[:n.rfind('_')]]['vol'] for n in batch['name']]).to(dtype).to(render_gt.device)
 
         rgbo_pred = self.forward(render_gt[:, :3], vols)
         rgbo_targ = apply_tf_torch(vols, tf_pts)
@@ -102,7 +102,7 @@ class NeuralTransferFunction(LightningModule):
         render_gt = batch['render'].to(dtype)
         tf_pts    = batch['tf_pts']
         if torch.is_tensor(tf_pts): tf_pts = [t for t in tf_pts]
-        vols = torch.stack([self.volumes[n[:-5]]['vol'] for n in batch['name']]).to(dtype).to(render_gt.device)
+        vols = torch.stack([self.volumes[n[:n.rfind('_')]]['vol'] for n in batch['name']]).to(dtype).to(render_gt.device)
 
         rgbo_pred = self.forward(render_gt[:, :3], vols).detach()
         rgbo_targ = apply_tf_torch(vols, tf_pts)
@@ -125,11 +125,11 @@ class NeuralTransferFunction(LightningModule):
         return {
             'loss': loss,
             'mae': mae,
-            'render': render_gt.cpu(),
-            'pred_slices': pred_slices.flip(-2).cpu(),
-            'targ_slices': targ_slices.flip(-2).cpu(),
-            'tf_tex': tf_pred_tex.cpu(),
-            'tf_targ': list(map(lambda tf: tf.cpu(), tf_pts))
+            'render': render_gt[[0]].cpu(),
+            'pred_slices': pred_slices[[0]].flip(-2).cpu(),
+            'targ_slices': targ_slices[[0]].flip(-2).cpu(),
+            'tf_tex': tf_pred_tex[[0]].cpu(),
+            'tf_targ': list(map(lambda tf: tf.cpu(), tf_pts[:1]))
         }
 
     def validation_epoch_end(self, outputs):
@@ -196,7 +196,7 @@ class NeuralTransferFunction(LightningModule):
     def train_dataloader(self):
         print('Loading Training DataLoader')
         if self.hparams.one_vol:
-            ffn = lambda p: int(p.name[11:-3]) < 9000
+            ffn = lambda p: int(p.name[p.name.rfind('_')+1:-3]) >= 5000
         else:
             ffn = lambda p: int(p.name[9:-8]) < 400
         ds = TorchDataset(self.hparams.trainds,
@@ -215,7 +215,7 @@ class NeuralTransferFunction(LightningModule):
     def val_dataloader(self):
         print('Loading Validation DataLoader')
         if self.hparams.one_vol:
-            ffn = lambda p: int(p.name[11:-3]) >= 9000
+            ffn = lambda p: int(p.name[p.name.rfind('_')+1:-3]) < 5000
         else:
             ffn = lambda p: int(p.name[9:-8]) >= 400
         ds = TorchDataset(self.hparams.trainds,
