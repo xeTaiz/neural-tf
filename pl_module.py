@@ -90,10 +90,13 @@ class NeuralTransferFunction(LightningModule):
         rgbo_loss = self.loss(rgbo_pred, rgbo_targ)
         rgbo_mae = F.l1_loss(rgbo_pred.detach(), rgbo_targ)
 
-        mask = torch.histc(vols.float(), 4096, 0, 1) > 1
+        hist = torch.histc(vols.float(), 4096, 1e-3, 1)
+        mask = hist > 1
+        weight = F.conv1d(F.pad(hist.float().view(1,1,-1), [1,1], mode='replicate'), torch.tensor([[[0.25, 0.5, 0.25]]], device=hist.device)).squeeze()
+        weight = weight[..., mask] / weight.max()
         valid_x = torch.linspace(0,1, 4096, dtype=render_gt.dtype, device=render_gt.device)[mask].expand(render_gt.size(0), 1, 1, 1, -1)
         tf_pred = self.forward(render_gt[:, :3], valid_x)[:, :, 0, 0, :]
-        tf_loss = self.loss(tf_pred, tf_tex[..., mask])
+        tf_loss = (self.loss(tf_pred, tf_tex[..., mask], reduction='none') * weight.expand_as(tf_pred)).mean()
         tf_mae = F.l1_loss(tf_pred.detach(), tf_tex[..., mask])
 
         loss = rgbo_loss + tf_loss
@@ -120,10 +123,13 @@ class NeuralTransferFunction(LightningModule):
         rgbo_loss = self.loss(rgbo_pred, rgbo_targ)
         rgbo_mae = F.l1_loss(rgbo_pred, rgbo_targ)
 
-        mask = torch.histc(vols.float(), 4096, 0, 1) > 1
+        hist = torch.histc(vols.float(), 4096, 1e-3, 1)
+        mask = hist > 1
+        weight = F.conv1d(F.pad(hist.float().view(1,1,-1), [1,1], mode='replicate'), torch.tensor([[[0.25, 0.5, 0.25]]], device=hist.device)).squeeze()
+        weight = weight[..., mask] / weight.max()
         valid_x = torch.linspace(0,1, 4096, dtype=render_gt.dtype, device=render_gt.device)[mask].expand(render_gt.size(0), 1, 1, 1, -1)
         tf_pred = self.forward(render_gt[:, :3], valid_x)[:, :, 0, 0, :]
-        tf_loss = self.loss(tf_pred, tf_tex[..., mask])
+        tf_loss = (self.loss(tf_pred, tf_tex[..., mask], reduction='none') * weight.expand_as(tf_pred)).mean()
         tf_mae = F.l1_loss(tf_pred.detach(), tf_tex[..., mask])
 
         tf_pred_tex = torch.zeros(*tf_pred.shape[:2], 4096, device=tf_pred.device, dtype=tf_pred.dtype)
