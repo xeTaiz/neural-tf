@@ -81,19 +81,29 @@ class NeuralTransferFunction(LightningModule):
         dtype = torch.float16 if self.hparams.precision == 16 else torch.float32
         render_gt = batch['render'].to(dtype)
         tf_pts    = batch['tf_pts']
+        tf_tex = tex_from_pts(tf_pts, 4096)
         if torch.is_tensor(tf_pts): tf_pts = [t for t in tf_pts]
         vols = torch.stack([self.volumes[n[:n.rfind('_')]]['vol'] for n in batch['name']]).to(dtype).to(render_gt.device)
 
         rgbo_pred = self.forward(render_gt[:, :3], vols)
         rgbo_targ = apply_tf_torch(vols, tf_pts)
-        loss = self.loss(rgbo_pred, rgbo_targ)
-        mae = F.l1_loss(rgbo_pred.detach(), rgbo_targ)
+        rgbo_loss = self.loss(rgbo_pred, rgbo_targ)
+        rgbo_mae = F.l1_loss(rgbo_pred.detach(), rgbo_targ)
 
+        mask = torch.histc(vols.float(), 4096, 0, 1) > 1
+        valid_x = torch.linspace(0,1, 4096, dtype=render_gt.dtype, device=render_gt.device)[mask].expand(render_gt.size(0), 1, 1, 1, -1)
+        tf_pred = self.forward(render_gt[:, :3], valid_x)[:, :, 0, 0, :]
+        tf_loss = self.loss(tf_pred, tf_tex[..., mask])
+        tf_mae = F.l1_loss(tf_pred.detach(), tf_tex[..., mask])
+
+        loss = rgbo_loss + tf_loss
         return {
             'loss': loss,
             'log': {
-                'metrics/train_loss': loss.detach().cpu().float(),
-                'metrics/train_mae':   mae.detach().cpu().float()
+                'metrics/train_rgbo_loss': rgbo_loss.detach().cpu().float(),
+                'metrics/train_tf_loss': tf_loss.detach().cpu().float(),
+                'metrics/train_rgbo_mae': rgbo_mae.detach().cpu().float(),
+                'metrics/train_tf_mae': tf_mae.detach().cpu().float()
             }
         }
 
@@ -101,19 +111,26 @@ class NeuralTransferFunction(LightningModule):
         dtype = torch.float16 if self.hparams.precision == 16 else torch.float32
         render_gt = batch['render'].to(dtype)
         tf_pts    = batch['tf_pts']
+        tf_tex = tex_from_pts(tf_pts, 4096)
         if torch.is_tensor(tf_pts): tf_pts = [t for t in tf_pts]
         vols = torch.stack([self.volumes[n[:n.rfind('_')]]['vol'] for n in batch['name']]).to(dtype).to(render_gt.device)
 
         rgbo_pred = self.forward(render_gt[:, :3], vols).detach()
         rgbo_targ = apply_tf_torch(vols, tf_pts)
-        loss = self.loss(rgbo_pred, rgbo_targ)
-        mae = F.l1_loss(rgbo_pred, rgbo_targ)
+        rgbo_loss = self.loss(rgbo_pred, rgbo_targ)
+        rgbo_mae = F.l1_loss(rgbo_pred, rgbo_targ)
 
-        # Linspace Volumes to get 1D TF
-        linsp_vols = torch.linspace(0, 1, 256, dtype=render_gt.dtype, device=render_gt.device).expand(render_gt.size(0), 1, 1,1,-1)
+        mask = torch.histc(vols.float(), 4096, 0, 1) > 1
+        valid_x = torch.linspace(0,1, 4096, dtype=render_gt.dtype, device=render_gt.device)[mask].expand(render_gt.size(0), 1, 1, 1, -1)
+        tf_pred = self.forward(render_gt[:, :3], valid_x)[:, :, 0, 0, :]
+        tf_loss = self.loss(tf_pred, tf_tex[..., mask])
+        tf_mae = F.l1_loss(tf_pred.detach(), tf_tex[..., mask])
 
+        tf_pred_tex = torch.zeros(*tf_pred.shape[:2], 4096, device=tf_pred.device, dtype=tf_pred.dtype)
+        tf_pred_tex[..., mask] = tf_pred
 
-        tf_pred_tex = self.forward(render_gt[:, :3], linsp_vols)[:, :, 0, 0, :]
+        loss = rgbo_loss + tf_loss
+
         z,h,w = rgbo_pred.shape[-3:]
         pred_slices = torch.stack([rgbo_pred[:, :, z//2, :,   : ],
                                    rgbo_pred[:, :,  :, h//2,  : ],
@@ -124,7 +141,10 @@ class NeuralTransferFunction(LightningModule):
 
         return {
             'loss': loss,
-            'mae': mae,
+            'rgbo_loss': rgbo_loss,
+            'tf_loss': tf_loss,
+            'rgbo_mae': rgbo_mae,
+            'tf_mae': tf_mae,
             'render': render_gt[[0]].cpu(),
             'pred_slices': pred_slices[[0]].flip(-2).cpu(),
             'targ_slices': targ_slices[[0]].flip(-2).cpu(),
@@ -153,7 +173,11 @@ class NeuralTransferFunction(LightningModule):
         }
         log.update(slice_log)
         log['metrics/val_loss'] = val_loss
-        log['metrics/val_mae']  = torch.stack([o['mae'] for o in outputs]).mean()
+        log['metrics/val_rgbo_loss'] = torch.stack([o['rgbo_loss'] for o in outputs]).mean()
+        log['metrics/val_tf_loss']   = torch.stack([o['tf_loss']   for o in outputs]).mean()
+        log['metrics/val_rgbo_mae']  = torch.stack([o['rgbo_mae']  for o in outputs]).mean()
+        log['metrics/val_tf_mae']    = torch.stack([o['tf_mae']    for o in outputs]).mean()
+        log['metrics/val_mae']  = (log['metrics/val_rgbo_mae'] + log['metrics/val_tf_mae']) / 2
 
         return {
             'val_loss': val_loss,
