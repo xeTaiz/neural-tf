@@ -1,4 +1,6 @@
+data
 wandb
+log
 **/.mypy_cache
 .vscode
 **/__pycache__
