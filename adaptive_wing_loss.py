@@ -4,6 +4,7 @@ import torch.nn as nn
 
 class NormalizedReLU(nn.Module):
     def __init__(self, inplace=True):
+        super().__init__()
         self.inplace = inplace
     def forward(self, x):
         act = F.relu(x, True)
