@@ -3,7 +3,6 @@ from functools import partial
 from itertools import count
 import time, math
 import numpy as np
-from sklearn.metrics import balanced_accuracy_score, accuracy_score
 import wandb
 import matplotlib.pyplot as plt
 

@@ -3,3 +3,6 @@ git+https://github.com/lessw2020/Ranger-Deep-Learning-Optimizer@master#egg=range
 git+https://github.com/aliutks/torchinterp1d@master#egg=torchinderp1d
 pytorch_lightning
 matplotlib
+PyGLM
+wandb
+numpy
