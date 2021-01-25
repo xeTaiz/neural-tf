@@ -6,7 +6,6 @@ import numpy as np
 from sklearn.metrics import balanced_accuracy_score, accuracy_score
 import wandb
 import matplotlib.pyplot as plt
-import seaborn
 
 import torch
 import torch.nn as nn
