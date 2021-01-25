@@ -22,11 +22,12 @@ class View(nn.Module):
             return x.view(*self.shape)
 
 class Projection(nn.Module):
-    def __init__(self, im_feat, vox_feat, out_ch=4):
+    def __init__(self, im_feat, vox_feat, out_ch=4, act=F.relu):
         super().__init__()
         self.out_ch = out_ch
         self.vox_feat = vox_feat
         self.im_feat = im_feat
+        self.act = act
         if im_feat != vox_feat*out_ch:
             self.project_w = nn.Linear(im_feat, vox_feat*out_ch)
         else:
@@ -39,13 +40,13 @@ class Projection(nn.Module):
     def forward(self, vol_latent, im_latent):
         bs = vol_latent.size(0)
         vol_sz = vol_latent.shape[-3:]
-        return F.conv3d(
+        return self.act(F.conv3d(
             vol_latent.view(1, bs*self.vox_feat, *vol_sz), # Mix BS with features to separate kernels for each batch item
             self.to_weight(im_latent), # Reshape (and opt. project) image features to Conv kernels, so that each group operates on 1 item of a batch
-            groups=bs).reshape(bs, self.out_ch, *vol_sz) # Reshape back to separate batch dim
+            groups=bs).reshape(bs, self.out_ch, *vol_sz)) # Reshape back to separate batch dim
 
 class NeuralTF(nn.Module):
-    def __init__(self, backbone=resnet34(True), layers=[16, 32, 32], first_conv_ks=1):
+    def __init__(self, backbone=resnet34(True), layers=[16, 32, 32], first_conv_ks=1, act=F.relu):
         super().__init__()
         self.im_backbone = backbone
         im_feat = self.im_backbone.fc.in_features
@@ -64,7 +65,7 @@ class NeuralTF(nn.Module):
             ),
             *vol_backbone                      # given layers
         )
-        self.projection = Projection(im_feat, vox_feat, out_ch=4)
+        self.projection = Projection(im_feat, vox_feat, out_ch=4, act=act)
 
     def forward(self, render, volume):
         im_latent = self.im_backbone(render)

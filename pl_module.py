@@ -18,6 +18,7 @@ from pytorch_lightning.metrics.functional import accuracy, confusion_matrix
 # from pytorch_msssim import ssim as ssim2d
 from ranger     import Ranger
 from neuraltf_modules import NeuralTF
+from adaptive_wing_loss import AdaptiveWingLoss, NormalizedReLU
 
 from torchvtk.datasets  import TorchDataset, TorchQueueDataset, dict_collate_fn
 from torchvtk.utils     import make_5d, apply_tf_torch, tex_from_pts, TransferFunctionApplication, random_tf_from_vol, create_peaky_tf
@@ -68,8 +69,8 @@ class NeuralTransferFunction(LightningModule):
         else:
             raise Exception(f'Invalid parameter backbone: {hparams.backbone}. Use either resnet18, resnet34, resnet50')
 
-        self.network = NeuralTF(first_conv_ks=hparams.first_conv_ks)
-        self.loss = F.mse_loss
+        self.network = NeuralTF(first_conv_ks=hparams.first_conv_ks, act=NormalizedReLU())
+        self.loss = AdaptiveWingLoss()
         print(f'Loading volumes to memory (from  {hparams.cq500}).')
         self.volumes = {it['name']: it for it in TorchDataset(hparams.cq500).preload()}
 
