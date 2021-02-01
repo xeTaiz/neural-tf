@@ -68,11 +68,25 @@ class NeuralTransferFunction(LightningModule):
             im_backbone = resnet50(pretrained=hparams.pretrained)
         else:
             raise Exception(f'Invalid parameter backbone: {hparams.backbone}. Use either resnet18, resnet34, resnet50')
-
+        if hparams.last_act == 'nrelu':
+            act = NormalizedReLU()
+        elif hparams.last_act == 'sigmoid':
+            act = torch.sigmoid
+        elif hparams.last_act == 'none':
+            act = Noop()
+        else:
+            raise Exception(f'Invalid last activation given ({hparams.last_act}).')
         self.network = NeuralTF(first_conv_ks=hparams.first_conv_ks, act=NormalizedReLU())
-        self.loss = AdaptiveWingLoss()
-        print(f'Loading volumes to memory (from  {hparams.cq500}).')
+        if hparams.loss == 'awl':
+            self.loss = AdaptiveWingLoss()
+        elif hparams.loss == 'mse':
+            self.loss = F.mse_loss
+        elif hparams.loss == 'mae':
+            self.loss = F.l1_loss
+        else:
+            raise Exception(f'Invalid loss given ({hparams.loss}). Valid choices are mse, mae and awl')
         if load_vols:
+            print(f'Loading volumes to memory (from  {hparams.cq500}).')
             self.volumes = {it['name']: it for it in TorchDataset(hparams.cq500).preload()}
         else:
             self.volumes = {}
@@ -251,6 +265,8 @@ class NeuralTransferFunction(LightningModule):
         parser.add_argument('--weight_decay',  default=1e-3, type=float, help='Weight decay for training.')
         parser.add_argument('--batch_size',    default=16,     type=int,   help='Batch Size')
         parser.add_argument('--opt', type=str, default='Ranger', help='Optimizer to use. One of Ranger, Adam')
+        parser.add_argument('--loss', type=str, default='awl', help='Loss Function to use')
+        parser.add_argument('--last-act', type=str, default='nrelu', help='Last activation function. Otions: nrelu, sigmoid, none')
         parser.add_argument('--preload', action='store_true', help='If set, preloads data into RAM.')
         parser.add_argument('--one_vol', action='store_true', help='Modify dataset splitting to work on single volume datasets')
         return parser
