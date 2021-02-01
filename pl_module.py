@@ -56,7 +56,7 @@ def fig_to_img(fig):
     return im
 
 class NeuralTransferFunction(LightningModule):
-    def __init__(self, hparams=None):
+    def __init__(self, hparams=None, load_vols=True):
         super().__init__()
         self.hparams = hparams
         # Define model that predicts TF from a rendering
@@ -72,7 +72,10 @@ class NeuralTransferFunction(LightningModule):
         self.network = NeuralTF(first_conv_ks=hparams.first_conv_ks, act=NormalizedReLU())
         self.loss = AdaptiveWingLoss()
         print(f'Loading volumes to memory (from  {hparams.cq500}).')
-        self.volumes = {it['name']: it for it in TorchDataset(hparams.cq500).preload()}
+        if load_vols:
+            self.volumes = {it['name']: it for it in TorchDataset(hparams.cq500).preload()}
+        else:
+            self.volumes = {}
 
     def forward(self, render, volume):
         return self.network(render, volume)
