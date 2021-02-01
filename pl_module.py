@@ -16,6 +16,7 @@ from pytorch_lightning.metrics.functional import accuracy, confusion_matrix
 
 # from pytorch_msssim import ssim as ssim2d
 from ranger     import Ranger
+from ranger_adabelief import RangerAdaBelief
 from neuraltf_modules import NeuralTF
 from adaptive_wing_loss import AdaptiveWingLoss, NormalizedReLU
 
@@ -140,23 +141,22 @@ class NeuralTransferFunction(LightningModule):
         pred_slices = torch.cat([o['pred_slices'] for o in outputs], dim=0)[:n]
         targ_slices = torch.cat([o['targ_slices'] for o in outputs], dim=0)[:n]
 
-        log = {
+        self.log_dict({
             f'figs/val_linspace_tf{i}': wandb.Image(
                 fig_to_img(plot_render_2tf(ren, tfp, tft)))
                 for i, ren, tfp, tft in zip(count(), renders, tf_texs, tf_targ)
-        }
-        slice_log = {
+        })
+        self.log_dict({
             f'figs/val_slices_{i}': wandb.Image(
                 fig_to_img(plot_slices(ps, ts)))
                 for i, ps, ts in zip(count(), pred_slices, targ_slices)
-        }
-        log.update(slice_log)
-        log['metrics/val_loss'] = val_loss
-        log['metrics/val_mae']  = torch.stack([o['mae'] for o in outputs]).mean()
+        })
+
+        self.log('metrics/val_loss', val_loss)
+        self.log('metrics/val_mae', torch.stack([o['mae'] for o in outputs]).mean())
 
         return {
-            'val_loss': val_loss,
-            'log': log
+            'val_loss': val_loss
         }
 
     def configure_optimizers(self):
@@ -168,11 +168,18 @@ class NeuralTransferFunction(LightningModule):
 
         if  self.hparams.opt.lower() == 'ranger':
             opt = Ranger(params, weight_decay=self.hparams.weight_decay)
+        elif self.hparams.opt.lower() == 'rangeradabelief':
+            opt = RangerAdaBelief(params, weight_decay=self.hparams.weight_decay)
         elif self.hparams.opt.lower() == 'adam':
             opt = torch.optim.Adam(params, weight_decay=self.hparams.weight_decay)
         else: raise Exception(f'Invalid optimizer given: {self.hparams.opt}')
         sched = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, factor=0.5)
-        return [opt], [sched]
+        return {
+            'optimizer': opt,
+            'lr_scheduler': sched,
+            'monitor': 'val_loss',
+            'mode': 'min'
+        }
 
     def transform(self, train):
         def train_augment(image):

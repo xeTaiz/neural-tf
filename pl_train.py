@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from pytorch_lightning import Trainer, seed_everything, loggers
-from pytorch_lightning.callbacks import Callback, LearningRateLogger, EarlyStopping, ModelCheckpoint
+from pytorch_lightning.callbacks import Callback, EarlyStopping, ModelCheckpoint
 from pl_module import NeuralTransferFunction
 
 from torchvtk.datasets.torch_dataset import TorchDataset
@@ -62,9 +62,9 @@ if __name__=='__main__':
             id=run_id,
             log_model=True,
             offline=not args.online)
-    ckpt_path = logger.experiment.dir + '/checkpoints/{epoch:03d}_{val_loss:.4f}'
-    ckpt_cb = ModelCheckpoint(ckpt_path, save_top_k=2, verbose=True)
-    callbacks = [EarlyStopping()]
+    ckpt_path = logger.experiment.dir + '/checkpoints'
+    ckpt_cb = ModelCheckpoint(dirpath=ckpt_path, filename='{epoch}-{val_loss:.4f}-{val_mae:.2f}',save_top_k=2, verbose=True, monitor='val_loss', mode='min', save_last=True)
+    callbacks = [EarlyStopping(monitor='val_loss', mode='min')]
     # if not args.overfit: callbacks.append(QueueUsageLogging(train_dl.dataset))
 
     trainer = Trainer.from_argparse_args(args,

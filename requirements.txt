@@ -1,8 +1,9 @@
 git+https://github.com/torchvtk/torchvtk@master#egg=torchvtk
 git+https://github.com/lessw2020/Ranger-Deep-Learning-Optimizer@master#egg=ranger
-git+https://github.com/aliutks/torchinterp1d@master#egg=torchinderp1d
+git+https://github.com/aliutkus/torchinterp1d@master#egg=torchinterp1d
 pytorch_lightning
 matplotlib
 PyGLM
 wandb
 numpy
+ranger-adabelief
