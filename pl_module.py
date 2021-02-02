@@ -21,12 +21,27 @@ from neuraltf_modules import NeuralTF
 from adaptive_wing_loss import AdaptiveWingLoss, NormalizedReLU
 
 from torchvtk.datasets  import TorchDataset, TorchQueueDataset, dict_collate_fn
-from torchvtk.utils     import make_5d, apply_tf_torch, tex_from_pts, TransferFunctionApplication, random_tf_from_vol, create_peaky_tf
+from torchvtk.utils     import make_4d, make_5d, apply_tf_torch, tex_from_pts, TransferFunctionApplication, random_tf_from_vol, create_peaky_tf
 from torchvtk.utils.tf_generate import make_trapezoid, colorize_trapeze, tf_pts_border, flatten_clip_sort_peaks, TFGenerator
 from torchvtk.transforms import Composite, Lambda
 from torchvision.transforms.functional import normalize, hflip
 
 from torchvtk.rendering import show, show_tf, plot_tfs, plot_render_2tf, plot_render_tf
+
+
+class WeightedMSELoss(nn.Module):
+    def __init__(self): super().__init__()
+    def forward(self, pred, targ, weight=None):
+        if weight is None:
+            weight = torch.ones_like(targ)
+        return torch.mean(F.mse_loss(pred, targ, reduction='none') * weight)
+
+class WeightedMAELoss(nn.Module):
+    def __init__(self): super().__init__()
+    def forward(self, pred, targ, weight=None):
+        if weight is None:
+            weight = torch.ones_like(targ)
+        return torch.mean(F.l1_loss(pred, targ, reduction='none') * weight)
 
 class Noop(nn.Module):
     def __init__(self, **kwargs): super().__init__()
@@ -76,13 +91,13 @@ class NeuralTransferFunction(LightningModule):
             act = Noop()
         else:
             raise Exception(f'Invalid last activation given ({hparams.last_act}).')
-        self.network = NeuralTF(first_conv_ks=hparams.first_conv_ks, act=NormalizedReLU())
+        self.network = NeuralTF(backbone=im_backbone, first_conv_ks=hparams.first_conv_ks, act=act)
         if hparams.loss == 'awl':
             self.loss = AdaptiveWingLoss()
         elif hparams.loss == 'mse':
-            self.loss = F.mse_loss
+            self.loss = WeightedMSELoss()
         elif hparams.loss == 'mae':
-            self.loss = F.l1_loss
+            self.loss = WeightedMAELoss()
         else:
             raise Exception(f'Invalid loss given ({hparams.loss}). Valid choices are mse, mae and awl')
         if load_vols:
@@ -103,7 +118,9 @@ class NeuralTransferFunction(LightningModule):
 
         rgbo_pred = self.forward(render_gt[:, :3], vols)
         rgbo_targ = apply_tf_torch(vols, tf_pts)
-        loss = self.loss(rgbo_pred, rgbo_targ)
+        w = torch.ones_like(rgbo_targ)
+        w[:, 3] += 10
+        loss = self.loss(rgbo_pred, rgbo_targ, weight=w)
         mae = F.l1_loss(rgbo_pred.detach(), rgbo_targ)
 
         return {
@@ -123,14 +140,12 @@ class NeuralTransferFunction(LightningModule):
 
         rgbo_pred = self.forward(render_gt[:, :3], vols).detach()
         rgbo_targ = apply_tf_torch(vols, tf_pts)
-        loss = self.loss(rgbo_pred, rgbo_targ)
+        w = torch.ones_like(rgbo_targ)
+        w[:, 3] += 10
+        loss = self.loss(rgbo_pred, rgbo_targ, weight=w)
         mae = F.l1_loss(rgbo_pred, rgbo_targ)
-
-        # Linspace Volumes to get 1D TF
-        linsp_vols = torch.linspace(0, 1, 256, dtype=render_gt.dtype, device=render_gt.device).expand(render_gt.size(0), 1, 1,1,-1)
-
-
-        tf_pred_tex = self.forward(render_gt[:, :3], linsp_vols)[:, :, 0, 0, :]
+        with torch.no_grad():
+            tf_pred_tex = self.infer_1d_tex(render_gt)
         z,h,w = rgbo_pred.shape[-3:]
         pred_slices = torch.stack([rgbo_pred[:, :, z//2, :,   : ],
                                    rgbo_pred[:, :,  :, h//2,  : ],
@@ -148,6 +163,11 @@ class NeuralTransferFunction(LightningModule):
             'tf_tex': tf_pred_tex[[0]].cpu(),
             'tf_targ': list(map(lambda tf: tf.cpu(), tf_pts[:1]))
         }
+
+    def infer_1d_tex(self, images):
+        images = make_4d(images)
+        linsp_vols = torch.linspace(0, 1, 256, dtype=images.dtype, device=images.device).expand(images.size(0), 1, 1,1,-1)
+        return self.forward(images[:, :3], linsp_vols)[:, :, 0, 0, :]
 
     def validation_epoch_end(self, outputs):
         n = 10

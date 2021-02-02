@@ -27,18 +27,20 @@ class AdaptiveWingLoss(nn.Module):
         self.epsilon = epsilon
         self.alpha = alpha
 
-    def forward(self, pred, target):
+    def forward(self, pred, target, weight=None):
         '''
         :Args:
             pred (torch.Tensor): Prediction. Shape must be more than 1D, same as `target`
             target (torch.Tensor): Target. Shape must be more than 1D, same as `pred`
         '''
-
+        if weight is None:
+            weight = torch.ones_like(target)
         y = target
         y_hat = pred
         delta_y = (y - y_hat).abs()
-        delta_y1 = delta_y[delta_y < self.theta]
-        delta_y2 = delta_y[delta_y >= self.theta]
+        m1, m2 = delta_y < self.theta, delta_y >= self.theta
+        delta_y1 = delta_y[m1]
+        delta_y2 = delta_y[m2]
         y1 = y[delta_y < self.theta]
         y2 = y[delta_y >= self.theta]
         loss1 = self.omega * torch.log(1 + torch.pow(
@@ -47,4 +49,4 @@ class AdaptiveWingLoss(nn.Module):
             torch.pow(self.theta / self.epsilon, self.alpha - y2 - 1)) * (1 / self.epsilon)
         C = self.theta * A - self.omega * torch.log(1 + torch.pow(self.theta / self.epsilon, self.alpha - y2))
         loss2 = A * delta_y2 - C
-        return (loss1.sum() + loss2.sum()) / (len(loss1) + len(loss2))
+        return ((loss1 * weight[m1]).sum() + (loss2 * weight[m2]).sum()) / (len(loss1) + len(loss2))
