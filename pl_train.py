@@ -89,6 +89,13 @@ if __name__=='__main__':
         'gpu_name': torch.cuda.get_device_name(0),
         'gpu_capability': torch.cuda.get_device_capability(0)
         }) # Log random seed
+    # Save source code !
+    trainer.logger.save('pl_train.py')
+    trainer.logger.save('pl_module.py')
+    trainer.logger.save('neuraltf_modules.py')
+    trainer.logger.save('adaptive_wing_loss.py')
+    trainer.logger.save('requirements.txt')
+
     # Fit model
     trainer.fit(model)
     print(f'Best model with loss of {ckpt_cb.best_model_score} saved to {ckpt_cb.best_model_path}')
