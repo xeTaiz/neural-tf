@@ -90,11 +90,11 @@ if __name__=='__main__':
         'gpu_capability': torch.cuda.get_device_capability(0)
         }) # Log random seed
     # Save source code !
-    trainer.logger.save('pl_train.py')
-    trainer.logger.save('pl_module.py')
-    trainer.logger.save('neuraltf_modules.py')
-    trainer.logger.save('adaptive_wing_loss.py')
-    trainer.logger.save('requirements.txt')
+    trainer.logger.experiment.save('pl_train.py')
+    trainer.logger.experiment.save('pl_module.py')
+    trainer.logger.experiment.save('neuraltf_modules.py')
+    trainer.logger.experiment.save('adaptive_wing_loss.py')
+    trainer.logger.experiment.save('requirements.txt')
 
     # Fit model
     trainer.fit(model)
