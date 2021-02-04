@@ -43,6 +43,7 @@ if __name__=='__main__':
     parser.add_argument('--min_epochs', default=50, type=int, help='Minimum number of epochs.')
     parser.add_argument('--max_epochs', default=150, type=int, help='Maximum number ob epochs to train')
     parser.add_argument('--online', action='store_true', help='Send logs to WandB directly, instead of at the end of the run')
+    parser.add_argument('--val-freq', type=float, default=1.0, help='How often to validate per training epoch. 0.5 would validate every half epoch')
     parser.add_argument('--n', type=str, default='', help='Run Name, additional suffix to WandB experiment name')
     parser = NeuralTransferFunction.add_model_specific_args(parser)
     args = parser.parse_args()
@@ -83,6 +84,7 @@ if __name__=='__main__':
         checkpoint_callback=ckpt_cb,
         min_epochs=args.min_epochs,
         max_epochs=args.max_epochs,
+        val_check_interval=args.val_freq
     )
     trainer.logger.log_hyperparams({
         'random_seed': args.seed,
