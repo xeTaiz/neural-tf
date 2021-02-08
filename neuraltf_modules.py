@@ -55,13 +55,13 @@ class NeuralTF(nn.Module):
         vol_backbone = [nn.Sequential(
             nn.Conv3d(nin, nout, 1, 1, 0),
             nn.ReLU(True),
-            nn.BatchNorm3d(nout)) for nin, nout in zip(layers, layers[1:])]
+            nn.InstanceNorm3d(nout)) for nin, nout in zip(layers, layers[1:])]
         first_conv_kwargs = {'kernel_size': first_conv_ks, 'padding': first_conv_ks//2}
         self.vol_backbone = nn.Sequential(
             nn.Sequential(
-                nn.Conv3d(1, layers[0], stride=1, **first_conv_kwargs), # Kernel Size 3 for first conv
+                nn.Conv3d(1, layers[0], stride=1, **first_conv_kwargs), # Kernel Size for first conv
                 nn.ReLU(True),
-                nn.BatchNorm3d(layers[0])
+                nn.InstanceNorm3d(layers[0])
             ),
             *vol_backbone                      # given layers
         )

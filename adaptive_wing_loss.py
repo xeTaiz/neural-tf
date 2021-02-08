@@ -10,6 +10,14 @@ class NormalizedReLU(nn.Module):
         act = F.relu(x, True)
         return act / (act.max() + torch.finfo(act.dtype).eps)
 
+class NegativeScaledReLU(nn.Module):
+    def __init__(self, inplace=True):
+        super().__init__()
+        self.inplace = inplace
+
+    def forward(self, x):
+        return F.relu(x / (x.min().abs() + torch.finfo(x.dtype).eps), self.inplace)
+
 class AdaptiveWingLoss(nn.Module):
     def __init__(self, omega=14, theta=0.5, epsilon=1, alpha=2.1):
         ''' Adaptive Wing Loss. See https://arxiv.org/pdf/1904.07399.pdf

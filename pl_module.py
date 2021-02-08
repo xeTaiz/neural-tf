@@ -18,13 +18,14 @@ from pytorch_lightning.metrics.functional import accuracy, confusion_matrix
 from ranger     import Ranger
 from ranger_adabelief import RangerAdaBelief
 from neuraltf_modules import NeuralTF
-from adaptive_wing_loss import AdaptiveWingLoss, NormalizedReLU
+from adaptive_wing_loss import AdaptiveWingLoss, NormalizedReLU, NegativeScaledReLU
 
 from torchvtk.datasets  import TorchDataset, TorchQueueDataset, dict_collate_fn
 from torchvtk.utils     import make_4d, make_5d, apply_tf_torch, tex_from_pts, TransferFunctionApplication, random_tf_from_vol, create_peaky_tf
 from torchvtk.utils.tf_generate import make_trapezoid, colorize_trapeze, tf_pts_border, flatten_clip_sort_peaks, TFGenerator
 from torchvtk.transforms import Composite, Lambda
 from torchvision.transforms.functional import normalize, hflip
+from torchvision.transforms import ColorJitter
 
 from torchvtk.rendering import show, show_tf, plot_tfs, plot_render_2tf, plot_render_tf
 
@@ -85,6 +86,10 @@ class NeuralTransferFunction(LightningModule):
             raise Exception(f'Invalid parameter backbone: {hparams.backbone}. Use either resnet18, resnet34, resnet50')
         if hparams.last_act == 'nrelu':
             act = NormalizedReLU()
+        elif hparams.last_act == 'relu':
+            act = F.relu
+        elif hparams.last_act == 'nsrelu':
+            act = NegativeScaledReLU()
         elif hparams.last_act == 'sigmoid':
             act = torch.sigmoid
         elif hparams.last_act == 'none':
@@ -116,20 +121,17 @@ class NeuralTransferFunction(LightningModule):
         if torch.is_tensor(tf_pts): tf_pts = [t for t in tf_pts]
         vols = torch.stack([self.volumes[n[:n.rfind('_')]]['vol'] for n in batch['name']]).to(dtype).to(render_gt.device)
 
-        rgbo_pred = self.forward(render_gt[:, :3], vols)
+        rgbo_pred = self.forward(render_gt[:, :3], vols) /5
         rgbo_targ = apply_tf_torch(vols, tf_pts)
         w = torch.ones_like(rgbo_targ)
-        w[:, 3] += 10
+        w[:, 3][rgbo_targ[:, 3] > 1e-2] *= self.hparams.opacity_weight
         loss = self.loss(rgbo_pred, rgbo_targ, weight=w)
         mae = F.l1_loss(rgbo_pred.detach(), rgbo_targ)
 
-        return {
-            'loss': loss,
-            'log': {
-                'metrics/train_loss': loss.detach().cpu().float(),
-                'metrics/train_mae':   mae.detach().cpu().float()
-            }
-        }
+        self.log('metrics/train_loss', loss.detach().cpu(), prog_bar=True)
+        self.log('metrics/train_mae', mae.detach().cpu(), prog_bar=True)
+
+        return loss
 
     def validation_step(self, batch, batch_idx):
         dtype = torch.float16 if self.hparams.precision == 16 else torch.float32
@@ -138,10 +140,10 @@ class NeuralTransferFunction(LightningModule):
         if torch.is_tensor(tf_pts): tf_pts = [t for t in tf_pts]
         vols = torch.stack([self.volumes[n[:n.rfind('_')]]['vol'] for n in batch['name']]).to(dtype).to(render_gt.device)
 
-        rgbo_pred = self.forward(render_gt[:, :3], vols).detach()
+        rgbo_pred = self.forward(render_gt[:, :3], vols).detach() /5
         rgbo_targ = apply_tf_torch(vols, tf_pts)
         w = torch.ones_like(rgbo_targ)
-        w[:, 3] += 10
+        w[:, 3][rgbo_targ[:, 3] > 1e-2] *= self.hparams.opacity_weight
         loss = self.loss(rgbo_pred, rgbo_targ, weight=w)
         mae = F.l1_loss(rgbo_pred, rgbo_targ)
         with torch.no_grad():
@@ -156,11 +158,11 @@ class NeuralTransferFunction(LightningModule):
 
         if batch_idx < self.hparams.num_images_logged:
             image_logs = {
-                'render': render_gt[[0]].cpu(),
-                'pred_slices': pred_slices[[0]].flip(-2).cpu(),
-                'targ_slices': targ_slices[[0]].flip(-2).cpu(),
-                'tf_tex': tf_pred_tex[[0]].cpu(),
-                'tf_targ': list(map(lambda tf: tf.cpu(), tf_pts[:1]))
+                'render': render_gt[[0]].cpu().float(),
+                'pred_slices': pred_slices[[0]].flip(-2).cpu().float(),
+                'targ_slices': targ_slices[[0]].flip(-2).cpu().float(),
+                'tf_tex': tf_pred_tex[[0]].cpu().float(),
+                'tf_targ': list(map(lambda tf: tf.cpu().float(), tf_pts[:1]))
             }
         else:
             image_logs = {}
@@ -180,10 +182,10 @@ class NeuralTransferFunction(LightningModule):
         n = self.hparams.num_images_logged
         val_loss = torch.stack([o['loss'] for o in outputs]).mean()
         renders = torch.cat([o['render'] for o in outputs], dim=0)[:n]
-        tf_texs = torch.cat([o['tf_tex'] for o in outputs], dim=0)[:n]
+        tf_texs = torch.clamp(torch.cat([o['tf_tex'] for o in outputs], dim=0)[:n], 0, 1)
         tf_targ = [tf for o in outputs[:n] for tf in o['tf_targ']]
-        pred_slices = torch.cat([o['pred_slices'] for o in outputs], dim=0)[:n]
-        targ_slices = torch.cat([o['targ_slices'] for o in outputs], dim=0)[:n]
+        pred_slices = torch.clamp(torch.cat([o['pred_slices'] for o in outputs], dim=0)[:n], 0, 1)
+        targ_slices = torch.clamp(torch.cat([o['targ_slices'] for o in outputs], dim=0)[:n], 0, 1)
 
         self.log_dict({
             f'figs/val_linspace_tf{i}': wandb.Image(
@@ -225,18 +227,21 @@ class NeuralTransferFunction(LightningModule):
             'mode': 'min'
         }
 
+    def denormalize(self, image):
+        pass
     def transform(self, train):
         def train_augment(image):
-            image[:3] = normalize(image[:3], [0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+            image[:3] = ColorJitter(0.05, 0.05, 0.05, 0.01)(image[:3])
+            # image[:3] = normalize(image[:3], [0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
             if (torch.rand(1) > 0.5).all():
                 image = hflip(image)
             return image
 
         def test_augment(image):
-            image[:3] = normalize(image[:3], [0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+            # image[:3] = normalize(image[:3], [0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
             return image
 
-        if train: return Composite(
+        if train and not self.hparams.overfit: return Composite(
             Lambda(train_augment, apply_on='render', dtype=torch.float32)
         )
         else:     return Composite(
@@ -251,7 +256,7 @@ class NeuralTransferFunction(LightningModule):
             ffn = lambda p: int(p.name[9:-8]) < 400
         ds = TorchDataset(self.hparams.trainds,
             filter_fn=ffn,
-            # preprocess_fn=self.transform(train=True)
+            preprocess_fn=self.transform(train=True)
         )
         if self.hparams.preload:
             ds = ds.preload()
@@ -270,7 +275,7 @@ class NeuralTransferFunction(LightningModule):
             ffn = lambda p: int(p.name[9:-8]) >= 400
         ds = TorchDataset(self.hparams.trainds,
             filter_fn=ffn,
-            # preprocess_fn=self.transform(train=False)
+            preprocess_fn=self.transform(train=False)
         )
         if self.hparams.preload:
             ds = ds.preload()
@@ -280,20 +285,26 @@ class NeuralTransferFunction(LightningModule):
             num_workers=0 if self.hparams.preload else 6
         )
 
+    def get_progress_bar_dict(self):
+        items = super().get_progress_bar_dict()
+        items.pop("v_num", None)
+        return items
+
     @staticmethod
     def add_model_specific_args(parent_parser):
         parser = ArgumentParser(parents=[parent_parser], add_help=False)
-        parser.add_argument('--lr_projection', default=1e-4, type=float, help='Learning Rate for the projection (MLP if exists)')
-        parser.add_argument('--lr_im_backbone', default=1e-5, type=float, help='Learning Rate for the pretrained ResNet backbone')
-        parser.add_argument('--lr_vol_backbone', default=1e-4, type=float, help='Learning Rate for the volume backbone')
+        parser.add_argument('--lr_projection', default=1e-3, type=float, help='Learning Rate for the projection (MLP if exists)')
+        parser.add_argument('--lr_im_backbone', default=1e-3, type=float, help='Learning Rate for the pretrained ResNet backbone')
+        parser.add_argument('--lr_vol_backbone', default=1e-3, type=float, help='Learning Rate for the volume backbone')
         parser.add_argument('--first_conv_ks', default=1, type=int, help='Kernel Size of the first Conv layer in the NeuralNet representing the Transfer Function')
         parser.add_argument('--backbone', type=str, default='resnet34', help='What backbone to use. Either resnet18, 34 or 50')
         parser.add_argument('--no_pretrain', action='store_false', dest='pretrained', help='Enable to start from random init in the ResNet')
-        parser.add_argument('--weight_decay',  default=1e-3, type=float, help='Weight decay for training.')
+        parser.add_argument('--weight_decay',  default=1e-6, type=float, help='Weight decay for training.')
         parser.add_argument('--batch_size',    default=16,     type=int,   help='Batch Size')
         parser.add_argument('--opt', type=str, default='Ranger', help='Optimizer to use. One of Ranger, Adam')
-        parser.add_argument('--loss', type=str, default='awl', help='Loss Function to use')
-        parser.add_argument('--last-act', type=str, default='nrelu', help='Last activation function. Otions: nrelu, sigmoid, none')
+        parser.add_argument('--loss', type=str, default='mse', help='Loss Function to use')
+        parser.add_argument('--opacity-weight', type=float, default=1.0, help='Weights the loss higher for opacity (>1e-2)')
+        parser.add_argument('--last-act', type=str, default='none', help='Last activation function. Otions: nrelu, relu, sigmoid, none')
         parser.add_argument('--preload', action='store_true', help='If set, preloads data into RAM.')
         parser.add_argument('--one_vol', action='store_true', help='Modify dataset splitting to work on single volume datasets')
         parser.add_argument('--num_images_logged', type=int, default=10, help='Number of slices / TFs logged during validation epoch')

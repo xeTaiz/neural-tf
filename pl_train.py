@@ -64,8 +64,9 @@ if __name__=='__main__':
             log_model=True,
             offline=not args.online)
     ckpt_path = logger.experiment.dir + '/checkpoints'
-    ckpt_cb = ModelCheckpoint(dirpath=ckpt_path, filename='{epoch}-{val_loss:.4f}-{val_mae:.2f}',save_top_k=2, verbose=True, monitor='val_loss', mode='min', save_last=True)
-    callbacks = [EarlyStopping(monitor='val_loss', mode='min')]
+    ckpt_cb = ModelCheckpoint(dirpath=ckpt_path, filename='{epoch}-{val_loss:.4f}-{val_mae:.2f}',save_top_k=1, verbose=True, monitor='val_loss', mode='min', save_last=True)
+    es_cb = EarlyStopping(monitor='val_loss', mode='min', patience=5)
+    callbacks = [ckpt_cb, es_cb] if not args.dev or args.overfit else []
     # if not args.overfit: callbacks.append(QueueUsageLogging(train_dl.dataset))
 
     trainer = Trainer.from_argparse_args(args,
@@ -81,7 +82,6 @@ if __name__=='__main__':
         amp_level='O2',
         auto_lr_find=args.find_lr,
         callbacks=callbacks,
-        checkpoint_callback=ckpt_cb,
         min_epochs=args.min_epochs,
         max_epochs=args.max_epochs,
         val_check_interval=args.val_freq
