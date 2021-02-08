@@ -154,14 +154,21 @@ class NeuralTransferFunction(LightningModule):
                                    rgbo_targ[:, :,  :, h//2,  : ],
                                    rgbo_targ[:, :,  :,   :, w//2]], dim=1)
 
+        if batch_idx < 50:
+            image_logs = {
+                'render': render_gt[[0]].cpu(),
+                'pred_slices': pred_slices[[0]].flip(-2).cpu(),
+                'targ_slices': targ_slices[[0]].flip(-2).cpu(),
+                'tf_tex': tf_pred_tex[[0]].cpu(),
+                'tf_targ': list(map(lambda tf: tf.cpu(), tf_pts[:1]))
+            }
+        else:
+            image_logs = {}
+
         return {
             'loss': loss,
             'mae': mae,
-            'render': render_gt[[0]].cpu(),
-            'pred_slices': pred_slices[[0]].flip(-2).cpu(),
-            'targ_slices': targ_slices[[0]].flip(-2).cpu(),
-            'tf_tex': tf_pred_tex[[0]].cpu(),
-            'tf_targ': list(map(lambda tf: tf.cpu(), tf_pts[:1]))
+            **image_logs
         }
 
     def infer_1d_tex(self, images):
