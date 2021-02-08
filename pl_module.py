@@ -154,7 +154,7 @@ class NeuralTransferFunction(LightningModule):
                                    rgbo_targ[:, :,  :, h//2,  : ],
                                    rgbo_targ[:, :,  :,   :, w//2]], dim=1)
 
-        if batch_idx < 50:
+        if batch_idx < self.hparams.num_images_logged:
             image_logs = {
                 'render': render_gt[[0]].cpu(),
                 'pred_slices': pred_slices[[0]].flip(-2).cpu(),
@@ -177,7 +177,7 @@ class NeuralTransferFunction(LightningModule):
         return self.forward(images[:, :3], linsp_vols)[:, :, 0, 0, :]
 
     def validation_epoch_end(self, outputs):
-        n = 10
+        n = self.hparams.num_images_logged
         val_loss = torch.stack([o['loss'] for o in outputs]).mean()
         renders = torch.cat([o['render'] for o in outputs], dim=0)[:n]
         tf_texs = torch.cat([o['tf_tex'] for o in outputs], dim=0)[:n]
@@ -296,4 +296,5 @@ class NeuralTransferFunction(LightningModule):
         parser.add_argument('--last-act', type=str, default='nrelu', help='Last activation function. Otions: nrelu, sigmoid, none')
         parser.add_argument('--preload', action='store_true', help='If set, preloads data into RAM.')
         parser.add_argument('--one_vol', action='store_true', help='Modify dataset splitting to work on single volume datasets')
+        parser.add_argument('--num_images_logged', type=int, default=10, help='Number of slices / TFs logged during validation epoch')
         return parser
