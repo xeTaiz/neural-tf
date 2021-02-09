@@ -193,11 +193,11 @@ class NeuralTransferFunction(LightningModule):
         n = self.hparams.num_images_logged
         self.n_im_logged = 0
         val_loss = torch.stack([o['loss'] for o in outputs]).mean()
-        renders = torch.cat([o['render'] for o in outputs], dim=0)[:n]
-        tf_texs = torch.clamp(torch.cat([o['tf_tex'] for o in outputs], dim=0)[:n], 0, 1)
+        renders = torch.cat([o['render'] for o in outputs[:n]], dim=0)
+        tf_texs = torch.clamp(torch.cat([o['tf_tex'] for o in outputs[:n]], dim=0), 0, 1)
         tf_targ = [tf for o in outputs[:n] for tf in o['tf_targ']]
-        pred_slices = torch.clamp(torch.cat([o['pred_slices'] for o in outputs], dim=0)[:n], 0, 1)
-        targ_slices = torch.clamp(torch.cat([o['targ_slices'] for o in outputs], dim=0)[:n], 0, 1)
+        pred_slices = torch.clamp(torch.cat([o['pred_slices'] for o in outputs[:n]], dim=0), 0, 1)
+        targ_slices = torch.clamp(torch.cat([o['targ_slices'] for o in outputs[:n]], dim=0), 0, 1)
 
         self.log_dict({
             f'figs/val_linspace_tf{i}': wandb.Image(
@@ -210,6 +210,7 @@ class NeuralTransferFunction(LightningModule):
                 for i, ps, ts in zip(count(), pred_slices, targ_slices)
         })
 
+        self.log('val_loss', val_loss)
         self.log('metrics/val_loss', val_loss)
         self.log('metrics/val_mae', torch.stack([o['mae'] for o in outputs]).mean())
 
