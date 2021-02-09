@@ -116,6 +116,11 @@ class NeuralTransferFunction(LightningModule):
     def forward(self, render, volume):
         return self.network(render, volume)
 
+    def infer_1d_tex(self, images):
+        images = make_4d(images)
+        linsp_vols = torch.linspace(0, 1, 256, dtype=images.dtype, device=images.device).expand(images.size(0), 1, 1,1,-1)
+        return self.forward(images[:, :3], linsp_vols)[:, :, 0, 0, :]
+
     def training_step(self, batch, batch_idx):
         dtype = torch.float16 if self.hparams.precision == 16 else torch.float32
         render_gt = batch['render'].to(dtype)
@@ -157,7 +162,7 @@ class NeuralTransferFunction(LightningModule):
         loss = self.loss(rgbo_pred, rgbo_targ, weight=w)
         mae = F.l1_loss(rgbo_pred, rgbo_targ)
         with torch.no_grad():
-            tf_pred_tex = self.infer_1d_tex(render_gt)
+            tf_pred_tex = self.infer_1d_tex(render_input)
         z,h,w = rgbo_pred.shape[-3:]
         pred_slices = torch.stack([rgbo_pred[:, :, z//2, :,   : ],
                                    rgbo_pred[:, :,  :, h//2,  : ],
@@ -184,11 +189,6 @@ class NeuralTransferFunction(LightningModule):
             **image_logs
         }
 
-    def infer_1d_tex(self, images):
-        images = make_4d(images)
-        linsp_vols = torch.linspace(0, 1, 256, dtype=images.dtype, device=images.device).expand(images.size(0), 1, 1,1,-1)
-        return self.forward(images[:, :3], linsp_vols)[:, :, 0, 0, :]
-
     def validation_epoch_end(self, outputs):
         n = self.hparams.num_images_logged
         self.n_im_logged = 0
@@ -212,10 +212,6 @@ class NeuralTransferFunction(LightningModule):
 
         self.log('metrics/val_loss', val_loss)
         self.log('metrics/val_mae', torch.stack([o['mae'] for o in outputs]).mean())
-
-        return {
-            'val_loss': val_loss
-        }
 
     def configure_optimizers(self):
         params = [
