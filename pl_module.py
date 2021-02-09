@@ -119,11 +119,15 @@ class NeuralTransferFunction(LightningModule):
     def training_step(self, batch, batch_idx):
         dtype = torch.float16 if self.hparams.precision == 16 else torch.float32
         render_gt = batch['render'].to(dtype)
+        if self.hparams.pretrained:
+            render_input = normalize(render_gt[:, :3], [0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        else:
+            render_input = render_gt[:, :3]
         tf_pts    = batch['tf_pts']
         if torch.is_tensor(tf_pts): tf_pts = [t for t in tf_pts]
         vols = torch.stack([self.volumes[n[:n.rfind('_')]]['vol'] for n in batch['name']]).to(dtype).to(render_gt.device)
 
-        rgbo_pred = self.forward(render_gt[:, :3], vols) /5
+        rgbo_pred = self.forward(render_input, vols) /5
         rgbo_targ = apply_tf_torch(vols, tf_pts)
         w = torch.ones_like(rgbo_targ)
         w[:, 3][rgbo_targ[:, 3] > 1e-2] *= self.hparams.opacity_weight
@@ -138,11 +142,15 @@ class NeuralTransferFunction(LightningModule):
     def validation_step(self, batch, batch_idx):
         dtype = torch.float16 if self.hparams.precision == 16 else torch.float32
         render_gt = batch['render'].to(dtype)
+        if self.hparams.pretrained:
+            render_input = normalize(render_gt[:, :3], [0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        else:
+            render_input = render_gt[:, :3]
         tf_pts    = batch['tf_pts']
         if torch.is_tensor(tf_pts): tf_pts = [t for t in tf_pts]
         vols = torch.stack([self.volumes[n[:n.rfind('_')]]['vol'] for n in batch['name']]).to(dtype).to(render_gt.device)
 
-        rgbo_pred = self.forward(render_gt[:, :3], vols).detach() /5
+        rgbo_pred = self.forward(render_input, vols).detach() /5
         rgbo_targ = apply_tf_torch(vols, tf_pts)
         w = torch.ones_like(rgbo_targ)
         w[:, 3][rgbo_targ[:, 3] > 1e-2] *= self.hparams.opacity_weight
