@@ -111,6 +111,8 @@ class NeuralTransferFunction(LightningModule):
         else:
             self.volumes = {}
 
+        self.n_im_logged = 0
+
     def forward(self, render, volume):
         return self.network(render, volume)
 
@@ -156,7 +158,8 @@ class NeuralTransferFunction(LightningModule):
                                    rgbo_targ[:, :,  :, h//2,  : ],
                                    rgbo_targ[:, :,  :,   :, w//2]], dim=1)
 
-        if batch_idx < self.hparams.num_images_logged:
+        if self.n_im_logged < self.hparams.num_images_logged:
+            self.n_im_logged += 1
             image_logs = {
                 'render': render_gt[[0]].cpu().float(),
                 'pred_slices': pred_slices[[0]].flip(-2).cpu().float(),
@@ -180,6 +183,7 @@ class NeuralTransferFunction(LightningModule):
 
     def validation_epoch_end(self, outputs):
         n = self.hparams.num_images_logged
+        self.n_im_logged = 0
         val_loss = torch.stack([o['loss'] for o in outputs]).mean()
         renders = torch.cat([o['render'] for o in outputs], dim=0)[:n]
         tf_texs = torch.clamp(torch.cat([o['tf_tex'] for o in outputs], dim=0)[:n], 0, 1)
