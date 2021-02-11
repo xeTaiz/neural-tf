@@ -75,7 +75,7 @@ class NeuralTransferFunction(LightningModule):
     def __init__(self, hparams=None, load_vols=True):
         super().__init__()
         self.hparams = hparams
-        # Define model that predicts TF from a rendering
+    # Image Backbone
         if self.hparams.backbone == 'resnet18':
             im_backbone = resnet18(pretrained=hparams.pretrained)
         elif self.hparams.backbone == 'resnet34':
@@ -84,6 +84,7 @@ class NeuralTransferFunction(LightningModule):
             im_backbone = resnet50(pretrained=hparams.pretrained)
         else:
             raise Exception(f'Invalid parameter backbone: {hparams.backbone}. Use either resnet18, resnet34, resnet50')
+    # Output Activation
         if hparams.last_act == 'nrelu':
             act = NormalizedReLU()
         elif hparams.last_act == 'relu':
@@ -96,7 +97,19 @@ class NeuralTransferFunction(LightningModule):
             act = Noop()
         else:
             raise Exception(f'Invalid last activation given ({hparams.last_act}).')
-        self.network = NeuralTF(backbone=im_backbone, first_conv_ks=hparams.first_conv_ks, act=act)
+    # Volume Backbone Normalization
+        if hparams.norm == 'instance':
+            norm = nn.InstanceNorm3d
+        elif hparams.norm == 'batch':
+            norm = nn.BatchNorm3d
+        elif hparams.norm == 'none':
+            norm = Noop
+        else:
+            raise Exception(f'Invalid norm given ({hparams.norm}).')
+
+    # Initialize Network
+        self.network = NeuralTF(backbone=im_backbone, first_conv_ks=hparams.first_conv_ks, act=act, norm=norm)
+    # Loss Function
         if hparams.loss == 'awl':
             self.loss = AdaptiveWingLoss()
         elif hparams.loss == 'mse':
@@ -105,13 +118,13 @@ class NeuralTransferFunction(LightningModule):
             self.loss = WeightedMAELoss()
         else:
             raise Exception(f'Invalid loss given ({hparams.loss}). Valid choices are mse, mae and awl')
+    # Preload volumes for Training
         if load_vols:
             print(f'Loading volumes to memory (from  {hparams.cq500}).')
             self.volumes = {it['name']: it for it in TorchDataset(hparams.cq500).preload()}
         else:
             self.volumes = {}
 
-        self.n_im_logged = 0
 
     def forward(self, render, volume):
         return self.network(render, volume)
@@ -132,7 +145,7 @@ class NeuralTransferFunction(LightningModule):
         if torch.is_tensor(tf_pts): tf_pts = [t for t in tf_pts]
         vols = torch.stack([self.volumes[n[:n.rfind('_')]]['vol'] for n in batch['name']]).to(dtype).to(render_gt.device)
 
-        rgbo_pred = self.forward(render_input, vols) /5
+        rgbo_pred = self.forward(render_input, vols)
         rgbo_targ = apply_tf_torch(vols, tf_pts)
         w = torch.ones_like(rgbo_targ)
         w[:, 3][rgbo_targ[:, 3] > 1e-2] *= self.hparams.opacity_weight
@@ -155,7 +168,7 @@ class NeuralTransferFunction(LightningModule):
         if torch.is_tensor(tf_pts): tf_pts = [t for t in tf_pts]
         vols = torch.stack([self.volumes[n[:n.rfind('_')]]['vol'] for n in batch['name']]).to(dtype).to(render_gt.device)
 
-        rgbo_pred = self.forward(render_input, vols).detach() /5
+        rgbo_pred = self.forward(render_input, vols).detach()
         rgbo_targ = apply_tf_torch(vols, tf_pts)
         w = torch.ones_like(rgbo_targ)
         w[:, 3][rgbo_targ[:, 3] > 1e-2] *= self.hparams.opacity_weight
@@ -171,8 +184,7 @@ class NeuralTransferFunction(LightningModule):
                                    rgbo_targ[:, :,  :, h//2,  : ],
                                    rgbo_targ[:, :,  :,   :, w//2]], dim=1)
 
-        if self.n_im_logged < self.hparams.num_images_logged:
-            self.n_im_logged += 1
+        if batch_idx < self.hparams.num_images_logged:
             image_logs = {
                 'render': render_gt[[0]].cpu().float(),
                 'pred_slices': pred_slices[[0]].flip(-2).cpu().float(),
@@ -191,7 +203,6 @@ class NeuralTransferFunction(LightningModule):
 
     def validation_epoch_end(self, outputs):
         n = self.hparams.num_images_logged
-        self.n_im_logged = 0
         val_loss = torch.stack([o['loss'] for o in outputs]).mean()
         renders = torch.cat([o['render'] for o in outputs[:n]], dim=0)
         tf_texs = torch.clamp(torch.cat([o['tf_tex'] for o in outputs[:n]], dim=0), 0, 1)
@@ -302,9 +313,9 @@ class NeuralTransferFunction(LightningModule):
     @staticmethod
     def add_model_specific_args(parent_parser):
         parser = ArgumentParser(parents=[parent_parser], add_help=False)
-        parser.add_argument('--lr_projection', default=1e-3, type=float, help='Learning Rate for the projection (MLP if exists)')
-        parser.add_argument('--lr_im_backbone', default=1e-3, type=float, help='Learning Rate for the pretrained ResNet backbone')
-        parser.add_argument('--lr_vol_backbone', default=1e-3, type=float, help='Learning Rate for the volume backbone')
+        parser.add_argument('--lr_projection', default=1e-4, type=float, help='Learning Rate for the projection (MLP if exists)')
+        parser.add_argument('--lr_im_backbone', default=1e-4, type=float, help='Learning Rate for the pretrained ResNet backbone')
+        parser.add_argument('--lr_vol_backbone', default=1e-4, type=float, help='Learning Rate for the volume backbone')
         parser.add_argument('--first_conv_ks', default=1, type=int, help='Kernel Size of the first Conv layer in the NeuralNet representing the Transfer Function')
         parser.add_argument('--backbone', type=str, default='resnet34', help='What backbone to use. Either resnet18, 34 or 50')
         parser.add_argument('--no_pretrain', action='store_false', dest='pretrained', help='Enable to start from random init in the ResNet')
@@ -314,6 +325,7 @@ class NeuralTransferFunction(LightningModule):
         parser.add_argument('--loss', type=str, default='mse', help='Loss Function to use')
         parser.add_argument('--opacity-weight', type=float, default=1.0, help='Weights the loss higher for opacity (>1e-2)')
         parser.add_argument('--last-act', type=str, default='none', help='Last activation function. Otions: nrelu, relu, sigmoid, none')
+        parser.add_argument('--norm', type=str, default='instance', help='Type of normalization to use in volume backbone. instance, batch or none')
         parser.add_argument('--preload', action='store_true', help='If set, preloads data into RAM.')
         parser.add_argument('--one_vol', action='store_true', help='Modify dataset splitting to work on single volume datasets')
         parser.add_argument('--num_images_logged', type=int, default=10, help='Number of slices / TFs logged during validation epoch')

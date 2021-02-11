@@ -16,7 +16,7 @@ class View(nn.Module):
         self.shape = shape
 
     def forward(self, x):
-        if exclude_batch_dim:
+        if self.exclude_batch_dim:
             return x.view(x.size(0), *self.shape)
         else:
             return x.view(*self.shape)
@@ -46,7 +46,7 @@ class Projection(nn.Module):
             groups=bs).reshape(bs, self.out_ch, *vol_sz)) # Reshape back to separate batch dim
 
 class NeuralTF(nn.Module):
-    def __init__(self, backbone=resnet34(True), layers=[16, 32, 32], first_conv_ks=1, act=F.relu):
+    def __init__(self, backbone=resnet34(True), layers=[16, 32, 32], first_conv_ks=1, act=F.relu, norm=nn.InstanceNorm3d):
         super().__init__()
         self.im_backbone = backbone
         im_feat = self.im_backbone.fc.in_features
@@ -55,13 +55,13 @@ class NeuralTF(nn.Module):
         vol_backbone = [nn.Sequential(
             nn.Conv3d(nin, nout, 1, 1, 0),
             nn.ReLU(True),
-            nn.InstanceNorm3d(nout)) for nin, nout in zip(layers, layers[1:])]
+            norm(nout)) for nin, nout in zip(layers, layers[1:])]
         first_conv_kwargs = {'kernel_size': first_conv_ks, 'padding': first_conv_ks//2}
         self.vol_backbone = nn.Sequential(
             nn.Sequential(
                 nn.Conv3d(1, layers[0], stride=1, **first_conv_kwargs), # Kernel Size for first conv
                 nn.ReLU(True),
-                nn.InstanceNorm3d(layers[0])
+                norm(layers[0])
             ),
             *vol_backbone                      # given layers
         )
