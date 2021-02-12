@@ -71,6 +71,15 @@ def fig_to_img(fig):
     plt.close(fig)
     return im
 
+def grab_bin_idxs(x, bins, as_tuples=False):
+    eps = torch.finfo(x.dtype).eps if x.dtype.is_floating_point else 1
+    boundaries = torch.linspace(x.min(), x.max() + eps, bins+1,
+                    device=x.device, dtype=x.dtype)
+    boundaries = torch.stack([boundaries[:-1], boundaries[1:]], dim=-1)
+    return [torch.nonzero(torch.logical_and(b[0] <= x , x < b[1]), as_tuple=as_tuples) for b in boundaries]
+
+
+
 class NeuralTransferFunction(LightningModule):
     def __init__(self, hparams=None, load_vols=True):
         super().__init__()
@@ -129,10 +138,32 @@ class NeuralTransferFunction(LightningModule):
     def forward(self, render, volume):
         return self.network(render, volume)
 
-    def infer_1d_tex(self, images):
-        images = make_4d(images)
-        linsp_vols = torch.linspace(0, 1, 256, dtype=images.dtype, device=images.device).expand(images.size(0), 1, 1,1,-1)
-        return self.forward(images[:, :3], linsp_vols)[:, :, 0, 0, :]
+    def infer_1d_tex(self, images, volumes, tex_resolution=256):
+        ''' Infer a 1D Transfer Function texture using the NeuralTF
+
+        Args:
+            images (Tensor): Either 3D image tensor or a 4D image batch. Predictions are averaged over the batch dimension.
+            volumes (Tensor): Either 4D volume tensor or a 5D volume batch. Predictions are averaged over the batch dimension.
+            tex_resolution (int, optional): Resolution of the resulting Transfer Function Texture. Defaults to 256.
+
+        Returns:
+            Tensor, Tensor: Transfer Function texture of shape `(C, tex_resolution)` and preclassified Volume (BS, C, D,H,W)
+        '''
+        images = make_4d(images)[:, :3]
+        volumes = make_5d(volumes)
+
+        rgbo = self.network(images, volumes)
+        idxs = grab_bin_idxs(volumes, tex_resolution, as_tuples=True)
+
+        r, g, b, o = rgbo.split(1, dim=1) # Split (BS, 4, D,H,W) into 4x (BS, 1, D,H,W)
+        return torch.stack([torch.tensor([
+            torch.clamp(r[idx], 0, 1).mean(),
+            torch.clamp(g[idx], 0, 1).mean(),
+            torch.clamp(b[idx], 0, 1).mean(),
+            torch.clamp(o[idx], 0, 1).mean()], dtype=r.dtype, device=r.device)
+                if idx[0].nelement() != 0
+                else torch.zeros(4, dtype=r.dtype, device=r.device)
+                for idx in idxs], dim=-1), rgbo
 
     def training_step(self, batch, batch_idx):
         dtype = torch.float16 if self.hparams.precision == 16 else torch.float32
@@ -168,18 +199,20 @@ class NeuralTransferFunction(LightningModule):
         if torch.is_tensor(tf_pts): tf_pts = [t for t in tf_pts]
         vols = torch.stack([self.volumes[n[:n.rfind('_')]]['vol'] for n in batch['name']]).to(dtype).to(render_gt.device)
 
-        rgbo_pred = self.forward(render_input, vols).detach()
+        rgbo_pred = self.forward(render_input, vols)
+        tf_pred_tex, _ = self.infer_1d_tex(render_input[0], vols[0])
         rgbo_targ = apply_tf_torch(vols, tf_pts)
         w = torch.ones_like(rgbo_targ)
         w[:, 3][rgbo_targ[:, 3] > 1e-2] *= self.hparams.opacity_weight
         loss = self.loss(rgbo_pred, rgbo_targ, weight=w)
         mae = F.l1_loss(rgbo_pred, rgbo_targ)
-        with torch.no_grad():
-            tf_pred_tex = self.infer_1d_tex(render_input)
         z,h,w = rgbo_pred.shape[-3:]
-        pred_slices = torch.stack([rgbo_pred[:, :, z//2, :,   : ],
+
+        pred_slices = torch.clamp(
+                      torch.stack([rgbo_pred[:, :, z//2, :,   : ],
                                    rgbo_pred[:, :,  :, h//2,  : ],
-                                   rgbo_pred[:, :,  :,   :, w//2]], dim=1)
+                                   rgbo_pred[:, :,  :,   :, w//2]], dim=1),
+                      0, 1)
         targ_slices = torch.stack([rgbo_targ[:, :, z//2, :,   : ],
                                    rgbo_targ[:, :,  :, h//2,  : ],
                                    rgbo_targ[:, :,  :,   :, w//2]], dim=1)
@@ -189,7 +222,7 @@ class NeuralTransferFunction(LightningModule):
                 'render': render_gt[[0]].cpu().float(),
                 'pred_slices': pred_slices[[0]].flip(-2).cpu().float(),
                 'targ_slices': targ_slices[[0]].flip(-2).cpu().float(),
-                'tf_tex': tf_pred_tex[[0]].cpu().float(),
+                'tf_tex': tf_pred_tex[None].cpu().float(),
                 'tf_targ': list(map(lambda tf: tf.cpu().float(), tf_pts[:1]))
             }
         else:
@@ -205,7 +238,7 @@ class NeuralTransferFunction(LightningModule):
         n = self.hparams.num_images_logged
         val_loss = torch.stack([o['loss'] for o in outputs]).mean()
         renders = torch.cat([o['render'] for o in outputs[:n]], dim=0)
-        tf_texs = torch.clamp(torch.cat([o['tf_tex'] for o in outputs[:n]], dim=0), 0, 1)
+        tf_texs = torch.cat([o['tf_tex'] for o in outputs[:n]], dim=0)
         tf_targ = [tf for o in outputs[:n] for tf in o['tf_targ']]
         pred_slices = torch.clamp(torch.cat([o['pred_slices'] for o in outputs[:n]], dim=0), 0, 1)
         targ_slices = torch.clamp(torch.cat([o['targ_slices'] for o in outputs[:n]], dim=0), 0, 1)
@@ -251,7 +284,7 @@ class NeuralTransferFunction(LightningModule):
         pass
     def transform(self, train):
         def train_augment(image):
-            image[:3] = ColorJitter(0.05, 0.05, 0.05, 0.01)(image[:3])
+            # image[:3] = ColorJitter(0.05, 0.05, 0.05, 0.01)(image[:3])
             # image[:3] = normalize(image[:3], [0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
             if (torch.rand(1) > 0.5).all():
                 image = hflip(image)
