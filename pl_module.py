@@ -71,12 +71,33 @@ def fig_to_img(fig):
     plt.close(fig)
     return im
 
-def grab_bin_idxs(x, bins, as_tuples=False):
-    eps = torch.finfo(x.dtype).eps if x.dtype.is_floating_point else 1
-    boundaries = torch.linspace(x.min(), x.max() + eps, bins+1,
-                    device=x.device, dtype=x.dtype)
+def grab_bin_idxs(x, bins, value_range=None, as_tuples=False):
+    ''' Bins the input to `value_range` using `bins` bins, then returns the indices of `x` which lie in one bin, for all bins
+
+    Args:
+        x (Tensor): The tensor for which to retrieve indices
+        bins (int): Number of bins to discretize the `value_range`
+        value_range (2-tuple/list, optional): The value range used for the bins. Defaults to None `(x.min(), x.max())`.
+        as_tuples (bool, optional): Returns the indices N-tuple with `N = x.ndim` when True. See torch.nonzero's `as_tuple`. Defaults to False.
+
+    Raises:
+        Exception: fwhen `value_range` is neither `None` or a 2-tuple/list
+
+    Returns:
+        [Tensor]: List of `x.ndim`-tuples with Index Tensors of shape (N,) when `as_tuples=True`, otherwise List of Index Tensors (N, x.ndim)
+    '''
+    if value_range is None:
+        # Add eps to x.max() to include the max value in the last upper bound
+        eps = torch.finfo(x.dtype).eps if x.dtype.is_floating_point else 1
+        mi, ma = x.min(), x.max() + eps
+    elif isinstance(value_range, (tuple, list)) and len(value_range) == 2:
+        mi, ma = value_range
+    else:
+        raise Exception(f'Invalid value_range given ({value_range})')
+    boundaries = torch.linspace(mi, ma, bins+1, device=x.device, dtype=x.dtype)
     boundaries = torch.stack([boundaries[:-1], boundaries[1:]], dim=-1)
-    return [torch.nonzero(torch.logical_and(b[0] <= x , x < b[1]), as_tuple=as_tuples) for b in boundaries]
+    return [ torch.nonzero(torch.logical_and(b[0] <= x , x < b[1]), as_tuple=as_tuples)
+            for b in boundaries ]
 
 
 
@@ -138,7 +159,7 @@ class NeuralTransferFunction(LightningModule):
     def forward(self, render, volume):
         return self.network(render, volume)
 
-    def infer_1d_tex(self, images, volumes, tex_resolution=256):
+    def infer_1d_tex(self, images, volumes, tex_resolution=256, reduction=torch.mean):
         ''' Infer a 1D Transfer Function texture using the NeuralTF
 
         Args:
@@ -153,15 +174,15 @@ class NeuralTransferFunction(LightningModule):
         volumes = make_5d(volumes)
 
         rgbo = self.network(images, volumes)
-        idxs = grab_bin_idxs(volumes, tex_resolution, as_tuples=True)
+        idxs = grab_bin_idxs(volumes, tex_resolution, value_range=(0,1), as_tuples=True)
 
         r, g, b, o = rgbo.split(1, dim=1) # Split (BS, 4, D,H,W) into 4x (BS, 1, D,H,W)
         return torch.stack([torch.tensor([
-            torch.clamp(r[idx], 0, 1).mean(),
-            torch.clamp(g[idx], 0, 1).mean(),
-            torch.clamp(b[idx], 0, 1).mean(),
-            torch.clamp(o[idx], 0, 1).mean()], dtype=r.dtype, device=r.device)
-                if idx[0].nelement() != 0
+            reduction(torch.clamp(r[idx], 0, 1)),
+            reduction(torch.clamp(g[idx], 0, 1)),
+            reduction(torch.clamp(b[idx], 0, 1)),
+            reduction(torch.clamp(o[idx], 0, 1))], dtype=r.dtype, device=r.device)
+                if idx[0].nelement() > 3
                 else torch.zeros(4, dtype=r.dtype, device=r.device)
                 for idx in idxs], dim=-1), rgbo
 
