@@ -1,7 +1,8 @@
 from argparse  import ArgumentParser
 from functools import partial
 from itertools import count
-import time, math
+from pathlib   import Path
+import time, math, os
 import numpy as np
 import wandb
 import matplotlib.pyplot as plt
@@ -32,16 +33,12 @@ from torchvtk.rendering import show, show_tf, plot_tfs, plot_render_2tf, plot_re
 
 class WeightedMSELoss(nn.Module):
     def __init__(self): super().__init__()
-    def forward(self, pred, targ, weight=None):
-        if weight is None:
-            weight = torch.ones_like(targ)
+    def forward(self, pred, targ, weight=1):
         return torch.mean(F.mse_loss(pred, targ, reduction='none') * weight)
 
 class WeightedMAELoss(nn.Module):
     def __init__(self): super().__init__()
-    def forward(self, pred, targ, weight=None):
-        if weight is None:
-            weight = torch.ones_like(targ)
+    def forward(self, pred, targ, weight=1):
         return torch.mean(F.l1_loss(pred, targ, reduction='none') * weight)
 
 class Noop(nn.Module):
@@ -327,7 +324,11 @@ class NeuralTransferFunction(LightningModule):
         if self.hparams.one_vol:
             ffn = lambda p: int(p.name[p.name.rfind('_')+1:-3]) >= 5000
         else:
-            ffn = lambda p: int(p.name[9:-8]) < 400
+            names = list(set(map(lambda n: n[:n.rfind('_')], os.listdir(Path(self.hparams.trainds)))))
+            split_idx = math.floor(0.8 * len(names))
+            train_names = names[:split_idx]
+            ffn = lambda p: p.name[:p.name.rfind('_')] in train_names
+            print('train names: ', train_names)
         ds = TorchDataset(self.hparams.trainds,
             filter_fn=ffn,
             preprocess_fn=self.transform(train=True)
@@ -346,7 +347,11 @@ class NeuralTransferFunction(LightningModule):
         if self.hparams.one_vol:
             ffn = lambda p: int(p.name[p.name.rfind('_')+1:-3]) < 5000
         else:
-            ffn = lambda p: int(p.name[9:-8]) >= 400
+            names = list(set(map(lambda n: n[:n.rfind('_')], os.listdir(Path(self.hparams.trainds)))))
+            split_idx = math.floor(0.8 * len(names))
+            valid_names = names[split_idx:]
+            ffn = lambda p: p.name[:p.name.rfind('_')] in valid_names
+            print('valid names: ', valid_names)
         ds = TorchDataset(self.hparams.trainds,
             filter_fn=ffn,
             preprocess_fn=self.transform(train=False)
