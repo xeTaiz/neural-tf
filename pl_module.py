@@ -20,6 +20,7 @@ from ranger     import Ranger
 from ranger_adabelief import RangerAdaBelief
 from neuraltf_modules import NeuralTF
 from adaptive_wing_loss import AdaptiveWingLoss, NormalizedReLU, NegativeScaledReLU
+from ssim3d_torch import ssim3d
 
 from torchvtk.datasets  import TorchDataset, TorchQueueDataset, dict_collate_fn
 from torchvtk.utils     import make_4d, make_5d, apply_tf_torch, tex_from_pts, TransferFunctionApplication, random_tf_from_vol, create_peaky_tf
@@ -40,6 +41,11 @@ class WeightedMAELoss(nn.Module):
     def __init__(self): super().__init__()
     def forward(self, pred, targ, weight=1):
         return torch.mean(F.l1_loss(pred, targ, reduction='none') * weight)
+
+class WeightedSSIMLoss(nn.Module):
+    def __init__(self): super().__init__()
+    def forward(self, pred, targ, weight=1):
+        return torch.mean(ssim3d(pred, targ, return_average=False) * weight)
 
 class Noop(nn.Module):
     def __init__(self, **kwargs): super().__init__()
@@ -143,6 +149,8 @@ class NeuralTransferFunction(LightningModule):
             self.loss = WeightedMSELoss()
         elif hparams.loss == 'mae':
             self.loss = WeightedMAELoss()
+        elif hparams.loss == 'ssim':
+            self.loss = partial(ssim3d, return_average=False)
         else:
             raise Exception(f'Invalid loss given ({hparams.loss}). Valid choices are mse, mae and awl')
     # Preload volumes for Training
