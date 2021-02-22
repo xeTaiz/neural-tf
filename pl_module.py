@@ -385,9 +385,9 @@ class NeuralTransferFunction(LightningModule):
     @staticmethod
     def add_model_specific_args(parent_parser):
         parser = ArgumentParser(parents=[parent_parser], add_help=False)
-        parser.add_argument('--lr_projection', default=1e-5, type=float, help='Learning Rate for the projection (MLP if exists)')
-        parser.add_argument('--lr_im_backbone', default=1e-5, type=float, help='Learning Rate for the pretrained ResNet backbone')
-        parser.add_argument('--lr_vol_backbone', default=1e-5, type=float, help='Learning Rate for the volume backbone')
+        parser.add_argument('--lr_projection', default=1e-3, type=float, help='Learning Rate for the projection (MLP if exists)')
+        parser.add_argument('--lr_im_backbone', default=1e-3, type=float, help='Learning Rate for the pretrained ResNet backbone')
+        parser.add_argument('--lr_vol_backbone', default=1e-3, type=float, help='Learning Rate for the volume backbone')
         parser.add_argument('--first_conv_ks', default=1, type=int, help='Kernel Size of the first Conv layer in the NeuralNet representing the Transfer Function')
         parser.add_argument('--backbone', type=str, default='resnet34', help='What backbone to use. Either resnet18, 34 or 50')
         parser.add_argument('--no_pretrain', action='store_false', dest='pretrained', help='Enable to start from random init in the ResNet')
