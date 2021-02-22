@@ -150,7 +150,7 @@ class NeuralTransferFunction(LightningModule):
         elif hparams.loss == 'mae':
             self.loss = WeightedMAELoss()
         elif hparams.loss == 'ssim':
-            self.loss = partial(ssim3d, return_average=False)
+            self.loss = WeightedSSIMLoss()
         else:
             raise Exception(f'Invalid loss given ({hparams.loss}). Valid choices are mse, mae and awl')
     # Preload volumes for Training
@@ -230,6 +230,7 @@ class NeuralTransferFunction(LightningModule):
         rgbo_targ = apply_tf_torch(vols, tf_pts)
         w = torch.ones_like(rgbo_targ)
         w[:, 3][rgbo_targ[:, 3] > 1e-2] *= self.hparams.opacity_weight
+
         loss = self.loss(rgbo_pred, rgbo_targ, weight=w)
         mae = F.l1_loss(rgbo_pred, rgbo_targ)
         z,h,w = rgbo_pred.shape[-3:]
@@ -330,7 +331,10 @@ class NeuralTransferFunction(LightningModule):
     def train_dataloader(self):
         print('Loading Training DataLoader')
         if self.hparams.one_vol:
-            ffn = lambda p: int(p.name[p.name.rfind('_')+1:-3]) >= 5000
+            split = math.floor(0.8* len(os.listdir(self.hparams.trainds)))
+            if self.hparams.max_train_samples is not None:
+                split = min(self.hparams.max_train_samples, split)
+            ffn = lambda p: int(p.name[p.name.rfind('_')+1:-3]) <= split
         else:
             names = list(set(map(lambda n: n[:n.rfind('_')], os.listdir(Path(self.hparams.trainds)))))
             split_idx = math.floor(0.8 * len(names))
@@ -353,7 +357,8 @@ class NeuralTransferFunction(LightningModule):
     def val_dataloader(self):
         print('Loading Validation DataLoader')
         if self.hparams.one_vol:
-            ffn = lambda p: int(p.name[p.name.rfind('_')+1:-3]) < 5000
+            split = math.floor(0.8* len(os.listdir(self.hparams.trainds)))
+            ffn = lambda p: int(p.name[p.name.rfind('_')+1:-3]) > split
         else:
             names = list(set(map(lambda n: n[:n.rfind('_')], os.listdir(Path(self.hparams.trainds)))))
             split_idx = math.floor(0.8 * len(names))
@@ -380,9 +385,9 @@ class NeuralTransferFunction(LightningModule):
     @staticmethod
     def add_model_specific_args(parent_parser):
         parser = ArgumentParser(parents=[parent_parser], add_help=False)
-        parser.add_argument('--lr_projection', default=1e-4, type=float, help='Learning Rate for the projection (MLP if exists)')
-        parser.add_argument('--lr_im_backbone', default=1e-4, type=float, help='Learning Rate for the pretrained ResNet backbone')
-        parser.add_argument('--lr_vol_backbone', default=1e-4, type=float, help='Learning Rate for the volume backbone')
+        parser.add_argument('--lr_projection', default=1e-5, type=float, help='Learning Rate for the projection (MLP if exists)')
+        parser.add_argument('--lr_im_backbone', default=1e-5, type=float, help='Learning Rate for the pretrained ResNet backbone')
+        parser.add_argument('--lr_vol_backbone', default=1e-5, type=float, help='Learning Rate for the volume backbone')
         parser.add_argument('--first_conv_ks', default=1, type=int, help='Kernel Size of the first Conv layer in the NeuralNet representing the Transfer Function')
         parser.add_argument('--backbone', type=str, default='resnet34', help='What backbone to use. Either resnet18, 34 or 50')
         parser.add_argument('--no_pretrain', action='store_false', dest='pretrained', help='Enable to start from random init in the ResNet')
@@ -396,4 +401,5 @@ class NeuralTransferFunction(LightningModule):
         parser.add_argument('--preload', action='store_true', help='If set, preloads data into RAM.')
         parser.add_argument('--one_vol', action='store_true', help='Modify dataset splitting to work on single volume datasets')
         parser.add_argument('--num_images_logged', type=int, default=10, help='Number of slices / TFs logged during validation epoch')
+        parser.add_argument('--max-train-samples', type=int, default=None, help='Restrict training dataset to given amount of samples')
         return parser

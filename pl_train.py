@@ -77,7 +77,7 @@ if __name__=='__main__':
         profiler=True,
         gpus=1,
         accumulate_grad_batches=args.accumulate_grads,
-        overfit_batches=1 if args.overfit else 0,
+        overfit_batches=4 if args.overfit else 0,
         precision=args.precision,
         amp_level='O2',
         auto_lr_find=args.find_lr,
