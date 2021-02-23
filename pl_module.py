@@ -345,14 +345,17 @@ class NeuralTransferFunction(LightningModule):
             filter_fn=ffn,
             preprocess_fn=self.transform(train=True)
         )
+        print(f' Train Dataset length: {len(ds)}')
         if self.hparams.preload:
             ds = ds.preload()
-        return torch.utils.data.DataLoader(ds,
+        dl = torch.utils.data.DataLoader(ds,
             batch_size=self.hparams.batch_size,
             collate_fn=dict_collate_fn,
             shuffle=True,
             num_workers=0 if self.hparams.preload else 6
         )
+        print(f'Train DataLoader length: {len(dl)}')
+        return dl
 
     def val_dataloader(self):
         print('Loading Validation DataLoader')

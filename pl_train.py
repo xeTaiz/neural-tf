@@ -61,7 +61,7 @@ if __name__=='__main__':
             project='deep-transfer-function',
             name=f'NEURALTF_{run_id}_{args.n}',
             id=run_id,
-            log_model=True,
+            log_model=args.online,
             offline=not args.online)
     ckpt_path = logger.experiment.dir + '/checkpoints'
     ckpt_cb = ModelCheckpoint(dirpath=ckpt_path, filename='{epoch}-{val_loss:.4f}-{val_mae:.2f}',save_top_k=1, verbose=True, monitor='val_loss', mode='min', save_last=True)
