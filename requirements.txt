@@ -1,7 +1,7 @@
 git+https://github.com/torchvtk/torchvtk@master#egg=torchvtk
 git+https://github.com/lessw2020/Ranger-Deep-Learning-Optimizer@master#egg=ranger
 git+https://github.com/aliutkus/torchinterp1d@master#egg=torchinterp1d
-pytorch_lightning
+pytorch_lightning==1.1.8
 matplotlib
 PyGLM
 wandb
