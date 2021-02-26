@@ -18,7 +18,7 @@ from pytorch_lightning.metrics.functional import accuracy, confusion_matrix
 # from pytorch_msssim import ssim as ssim2d
 from ranger     import Ranger
 from ranger_adabelief import RangerAdaBelief
-from neuraltf_modules import NeuralTF
+from neuraltf_modules import NeuralTF, NeuralTF_Unet_Adain
 from adaptive_wing_loss import AdaptiveWingLoss, NormalizedReLU, NegativeScaledReLU
 from ssim3d_torch import ssim3d
 
@@ -48,8 +48,8 @@ class WeightedSSIMLoss(nn.Module):
         return torch.mean(ssim3d(pred, targ, return_average=False) * weight)
 
 class Noop(nn.Module):
-    def __init__(self, **kwargs): super().__init__()
-    def forward(self, x, **kwargs): return x
+    def __init__(self, *args, **kwargs): super().__init__()
+    def forward(self, x, *args, **kwargs): return x
 
 def plot_slices(pred_slices, targ_slices):
     gs = {
@@ -103,7 +103,6 @@ def grab_bin_idxs(x, bins, value_range=None, as_tuples=False):
             for b in boundaries ]
 
 
-
 class NeuralTransferFunction(LightningModule):
     def __init__(self, hparams=None, load_vols=True):
         super().__init__()
@@ -119,14 +118,19 @@ class NeuralTransferFunction(LightningModule):
             raise Exception(f'Invalid parameter backbone: {hparams.backbone}. Use either resnet18, resnet34, resnet50')
     # Output Activation
         if hparams.last_act == 'nrelu':
+            act_cls = NormalizedReLU
             act = NormalizedReLU()
         elif hparams.last_act == 'relu':
+            act_cls = nn.ReLU
             act = F.relu
         elif hparams.last_act == 'nsrelu':
+            act_cls = NegativeScaledReLU
             act = NegativeScaledReLU()
         elif hparams.last_act == 'sigmoid':
+            act_cls = nn.Sigmoid
             act = torch.sigmoid
         elif hparams.last_act == 'none':
+            act_cls = Noop
             act = Noop()
         else:
             raise Exception(f'Invalid last activation given ({hparams.last_act}).')
@@ -141,7 +145,14 @@ class NeuralTransferFunction(LightningModule):
             raise Exception(f'Invalid norm given ({hparams.norm}).')
 
     # Initialize Network
-        self.network = NeuralTF(backbone=im_backbone, first_conv_ks=hparams.first_conv_ks, act=act, norm=norm)
+        if   hparams.net == 'ConvProject':
+            self.network = NeuralTF(backbone=im_backbone, first_conv_ks=hparams.first_conv_ks, last_act=act, norm=norm)
+        elif hparams.net == 'UnetAdain':
+            self.network = NeuralTF_Unet_Adain(backbone=im_backbone, last_act=act_cls)
+        else:
+            raise Exception(f'Invalid net parameter given ({hparams.net}). Choose either ConvProject or UnetAdain')
+
+
     # Loss Function
         if hparams.loss == 'awl':
             self.loss = AdaptiveWingLoss()
@@ -289,8 +300,9 @@ class NeuralTransferFunction(LightningModule):
         params = [
             {'params': self.network.im_backbone.parameters(), 'lr': self.hparams.lr_im_backbone},
             {'params': self.network.vol_backbone.parameters(), 'lr': self.hparams.lr_vol_backbone},
-            {'params': self.network.projection.parameters(), 'lr': self.hparams.lr_projection}
         ]
+        if self.hparams.net == 'ConvProject':
+            params.append({'params': self.network.projection.parameters(), 'lr': self.hparams.lr_projection})
 
         if  self.hparams.opt.lower() == 'ranger':
             opt = Ranger(params, weight_decay=self.hparams.weight_decay)
@@ -372,7 +384,7 @@ class NeuralTransferFunction(LightningModule):
             filter_fn=ffn,
             preprocess_fn=self.transform(train=False)
         )
-        if self.hparams.preload:
+        if self.hparams.preload_valid:
             ds = ds.preload()
         return torch.utils.data.DataLoader(ds,
             batch_size=self.hparams.batch_size,
@@ -391,6 +403,7 @@ class NeuralTransferFunction(LightningModule):
         parser.add_argument('--lr_projection', default=1e-3, type=float, help='Learning Rate for the projection (MLP if exists)')
         parser.add_argument('--lr_im_backbone', default=1e-3, type=float, help='Learning Rate for the pretrained ResNet backbone')
         parser.add_argument('--lr_vol_backbone', default=1e-3, type=float, help='Learning Rate for the volume backbone')
+        parser.add_argument('--net', default='ConvProject', type=str, help='Model for the Neural TF. ConvProject or UnetAdain')
         parser.add_argument('--first_conv_ks', default=1, type=int, help='Kernel Size of the first Conv layer in the NeuralNet representing the Transfer Function')
         parser.add_argument('--backbone', type=str, default='resnet34', help='What backbone to use. Either resnet18, 34 or 50')
         parser.add_argument('--no_pretrain', action='store_false', dest='pretrained', help='Enable to start from random init in the ResNet')
@@ -401,7 +414,8 @@ class NeuralTransferFunction(LightningModule):
         parser.add_argument('--opacity-weight', type=float, default=1.0, help='Weights the loss higher for opacity (>1e-2)')
         parser.add_argument('--last-act', type=str, default='none', help='Last activation function. Otions: nrelu, relu, sigmoid, none')
         parser.add_argument('--norm', type=str, default='instance', help='Type of normalization to use in volume backbone. instance, batch or none')
-        parser.add_argument('--preload', action='store_true', help='If set, preloads data into RAM.')
+        parser.add_argument('--preload', action='store_true', help='If set, preloads training data into RAM.')
+        parser.add_argument('--preload-valid', action='store_true', help='If set, preloads the validation dataset into RAM')
         parser.add_argument('--one_vol', action='store_true', help='Modify dataset splitting to work on single volume datasets')
         parser.add_argument('--num_images_logged', type=int, default=10, help='Number of slices / TFs logged during validation epoch')
         parser.add_argument('--max-train-samples', type=int, default=None, help='Restrict training dataset to given amount of samples')

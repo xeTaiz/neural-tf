@@ -1,11 +1,20 @@
 # %%
+from functools import partial
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from torchvision.models import resnet34
+from unet3d import Unet3D, AdaptiveInstanceNorm3d
 
 #%%
+
+def mish(x): return x * torch.tanh(F.softplus(x))
+class Mish(nn.Module):
+    def __init__(self, inplace=True): super().__init__()
+    def forward(self, x): return mish(x)
+
 class Noop(nn.Module):
     def __init__(self): super().__init__()
     def forward(self, x): return x
@@ -45,19 +54,15 @@ class Projection(nn.Module):
             self.to_weight(im_latent), # Reshape (and opt. project) image features to Conv kernels, so that each group operates on 1 item of a batch
             groups=bs).reshape(bs, self.out_ch, *vol_sz)) # Reshape back to separate batch dim
 
-class NeuralTF(nn.Module):
-    def __init__(self, backbone=resnet34(True), layers=[16, 32, 32], first_conv_ks=1, act=F.relu, norm=nn.InstanceNorm3d):
+class Standard3dConvNet(nn.Module):
+    def __init__(self, layers=[16, 32, 64], first_conv_ks=1, norm=nn.InstanceNorm3d):
         super().__init__()
-        self.im_backbone = backbone
-        im_feat = self.im_backbone.fc.in_features
-        self.im_backbone.fc = Noop()
-        vox_feat = layers[-1]
         vol_backbone = [nn.Sequential(
             nn.Conv3d(nin, nout, 1, 1, 0),
             nn.ReLU(True),
             norm(nout)) for nin, nout in zip(layers, layers[1:])]
         first_conv_kwargs = {'kernel_size': first_conv_ks, 'padding': first_conv_ks//2}
-        self.vol_backbone = nn.Sequential(
+        self.net = nn.Sequential(
             nn.Sequential(
                 nn.Conv3d(1, layers[0], stride=1, **first_conv_kwargs), # Kernel Size for first conv
                 nn.ReLU(True),
@@ -65,7 +70,18 @@ class NeuralTF(nn.Module):
             ),
             *vol_backbone                      # given layers
         )
-        self.projection = Projection(im_feat, vox_feat, out_ch=4, act=act)
+
+    def forward(self, x): return self.net(x)
+
+class NeuralTF(nn.Module):
+    def __init__(self, backbone=resnet34(True), layers=[16, 32, 32], last_act=F.relu, norm=nn.InstanceNorm3d, first_conv_ks=1):
+        super().__init__()
+        self.im_backbone = backbone
+        im_feat = self.im_backbone.fc.in_features
+        vox_feat = layers[-1]
+        self.im_backbone.fc = Noop()
+        self.vol_backbone = Standard3dConvNet(layers=layers, norm=norm, first_conv_ks=first_conv_ks)
+        self.projection = Projection(im_feat, vox_feat, out_ch=4, act=last_act)
 
     def forward(self, render, volume):
         im_latent = self.im_backbone(render)
@@ -73,16 +89,21 @@ class NeuralTF(nn.Module):
         return self.projection(vol_latent, im_latent) # Returns RGBO Volume
 
 
-# %%  vox_feat=8, vol_sz=(5,5,5), BS=3, out_ch=4
-# vol_latent = torch.stack([i*torch.ones(8, 5,5,5) for i in range(3)])               # (3, 8,  5,5,5)
-# im_latent = torch.stack([i*torch.ones(8*4) for i in range(3)]).view(3,4*8,1,1,1)   # (3, 32, 1,1,1)
+class NeuralTF_Unet_Adain(nn.Module):
+    def __init__(self, backbone=resnet34(True), last_act=nn.ReLU, style_dim=256):
+        super().__init__()
+        self.im_backbone = backbone
+        im_feat = self.im_backbone.fc.in_features
+        self.im_backbone.fc = Noop()
+        if im_feat == style_dim:
+            self.to_style = Noop()
+        else:
+            self.to_style = nn.Linear(im_feat, style_dim)
+        self.vol_backbone = Unet3D(
+            last_act=last_act,
+            norm=partial(AdaptiveInstanceNorm3d, style_dim=style_dim)
+        )
 
-# vol_tfd = vol_latent.view(1, 3*8, 5,5,5)
-# im_tfd = im_latent.view(3*4, 8, 1,1,1)
-
-# res = F.conv3d(vol_tfd, im_tfd, groups=3)
-# res.shape
-# res2 = res.view(3, 4, 5,5,5)
-# nn.Conv3d(24, 12, 1, 1, groups=3).weight.shape
-
-# %%
+    def forward(self, render, volume):
+        style = self.to_style(self.im_backbone(render))
+        return self.vol_backbone(volume, style)

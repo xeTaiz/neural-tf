@@ -54,6 +54,9 @@ if __name__=='__main__':
     seed_everything(args.seed)
 
     # Setup Model, Logger, Trainer
+    if args.overfit:
+        args.preload = True
+        args.max_train_samples = 4
     model = NeuralTransferFunction(hparams=args) # Must be AFTER prepare_data(), because it messes with multiprocessing
     print(model)
     run_id = str(uuid.uuid4())[:6]
@@ -84,7 +87,8 @@ if __name__=='__main__':
         callbacks=callbacks,
         min_epochs=args.min_epochs,
         max_epochs=args.max_epochs,
-        val_check_interval=args.val_freq
+        val_check_interval=args.val_freq,
+        limit_val_batches=0.0 if args.overfit else 1.0
     )
     trainer.logger.log_hyperparams({
         'random_seed': args.seed,
