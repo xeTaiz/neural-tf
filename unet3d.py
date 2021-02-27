@@ -14,19 +14,21 @@ class AdaptiveInstanceNorm3d(nn.Module):
         nn.init.normal_(self.mu.weight,  std=1e-2)
         nn.init.constant_(self.mu.bias,  0.0)
         self.n_feature_maps = num_feature_maps
+        self.eps = torch.finfo(torch.float32).eps
 
     def forward(self, x, y):
         bs = x.size(0)
-        eps = torch.finfo(x.dtype).eps # Epsilon based on dtype
 
         pmu = self.mu(y).view(bs, -1, 1,1,1)   # Predicted mean
         pstd = torch.sqrt(self.var(y).view(bs, -1, 1,1,1)) # Predicted std (actually predicting variance for numerical stability)
 
-        xmean = x.mean(dim=(2,3,4)).view(bs, self.n_feature_maps, 1,1,1) # Get mean of x
-        xstd  = x.std( dim=(2,3,4)).view(bs, self.n_feature_maps, 1,1,1) # Get std of x
+        with torch.cuda.amp.autocast(enabled=False):
+            x = x.float()
+            xmean = x.mean(dim=(2,3,4)).view(bs, self.n_feature_maps, 1,1,1) # Get mean of x
+            xstd  = x.std( dim=(2,3,4)).view(bs, self.n_feature_maps, 1,1,1) # Get std of x
 
-        std_factor = pstd / (xstd + eps) # pre-multiply the scaling factor to adjust to the new std
-        return (x - xmean) * (std_factor + eps) + pmu  # Normalize x
+        std_factor = pstd.float() / (xstd + self.eps) # pre-multiply the scaling factor to adjust to the new std
+        return (x - xmean) * (std_factor + self.eps) + pmu.float()  # Normalize x
 
 
 class ConvBlock(nn.Module):
@@ -64,7 +66,7 @@ class Unet3D(nn.Module):
         # Init
         super().__init__()
         self.downsample = partial(F.interpolate, scale_factor=0.5, mode='nearest')
-        self.upsample   = partial(F.interpolate, scale_factor=2.0, mode='nearest')
+        self.upsample   = nn.Upsample(scale_factor=2, mode='nearest')
         self.encoder, self.decoder = nn.ModuleList([]), nn.ModuleList([])
         decoder_nin_mult = [1] + [2]*(len(layers)-1)
         # FIRST CONV
