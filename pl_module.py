@@ -23,14 +23,22 @@ from adaptive_wing_loss import AdaptiveWingLoss, NormalizedReLU, NegativeScaledR
 from ssim3d_torch import ssim3d
 
 from torchvtk.datasets  import TorchDataset, TorchQueueDataset, dict_collate_fn
-from torchvtk.utils     import make_4d, make_5d, apply_tf_torch, tex_from_pts, TransferFunctionApplication, random_tf_from_vol, create_peaky_tf
+from torchvtk.utils     import make_4d, make_5d, make_nd, apply_tf_torch, tex_from_pts, TransferFunctionApplication, random_tf_from_vol, create_peaky_tf
 from torchvtk.utils.tf_generate import make_trapezoid, colorize_trapeze, tf_pts_border, flatten_clip_sort_peaks, TFGenerator
 from torchvtk.transforms import Composite, Lambda
-from torchvision.transforms.functional import normalize, hflip
+from torchvision.transforms.functional import hflip
 from torchvision.transforms import ColorJitter
 
 from torchvtk.rendering import show, show_tf, plot_tfs, plot_render_2tf, plot_render_tf
 
+def normalize(tensors, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225], inplace=True):
+    mean = torch.as_tensor(mean, dtype=tensors.dtype, device=tensors.device)[None, :, None, None]
+    std  = torch.as_tensor(std,  dtype=tensors.dtype, device=tensors.device)[None, :, None, None]
+
+    if not inplace:
+        tensors = tensors.clone()
+
+    return tensors.sub_(mean).div_(std)
 
 class WeightedMSELoss(nn.Module):
     def __init__(self): super().__init__()
