@@ -20,7 +20,7 @@ class AdaptiveInstanceNorm3d(nn.Module):
         bs = x.size(0)
 
         pmu = self.mu(y).view(bs, -1, 1,1,1)   # Predicted mean
-        pstd = torch.sqrt(self.var(y).view(bs, -1, 1,1,1)) # Predicted std (actually predicting variance for numerical stability)
+        pstd = torch.sqrt(self.var(y).view(bs, -1, 1,1,1)) + self.eps # Predicted std (actually predicting variance for numerical stability)
 
         with torch.cuda.amp.autocast(enabled=False):
             x = x.float()
@@ -87,7 +87,7 @@ class Unet3D(nn.Module):
         )
 
 
-    def forward(self, x, y):
+    def forward(self, x, y=None):
         x = torch.cat([x, self.first_conv(x)], dim=1)  # to layers[0]
         skips = [x]
         for block in self.encoder:

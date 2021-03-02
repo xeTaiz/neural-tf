@@ -31,12 +31,12 @@ class View(nn.Module):
             return x.view(*self.shape)
 
 class Projection(nn.Module):
-    def __init__(self, im_feat, vox_feat, out_ch=4, act=F.relu):
+    def __init__(self, im_feat, vox_feat, out_ch=4, act=nn.ReLU):
         super().__init__()
         self.out_ch = out_ch
         self.vox_feat = vox_feat
         self.im_feat = im_feat
-        self.act = act
+        self.act = act(True)
         if im_feat != vox_feat*out_ch:
             self.project_w = nn.Linear(im_feat, vox_feat*out_ch)
         else:
@@ -53,6 +53,35 @@ class Projection(nn.Module):
             vol_latent.view(1, bs*self.vox_feat, *vol_sz), # Mix BS with features to separate kernels for each batch item
             self.to_weight(im_latent), # Reshape (and opt. project) image features to Conv kernels, so that each group operates on 1 item of a batch
             groups=bs).reshape(bs, self.out_ch, *vol_sz)) # Reshape back to separate batch dim
+
+class ProjectionPlus(nn.Module):
+    def __init__(self, im_feat, vox_feat, out_ch=4, act=nn.ReLU):
+        super().__init__()
+        self.out_ch = out_ch
+        self.vox_feat = vox_feat
+        self.im_feat = im_feat
+        if im_feat != vox_feat*out_ch*8:
+            self.project_w = nn.Linear(im_feat, vox_feat*out_ch*8)
+        else:
+            self.project_w = Noop()
+        self.final_layers = nn.Sequential(
+            nn.ReLU(True),
+            nn.InstanceNorm3d(out_ch*8),
+            nn.Conv3d(out_ch*8, out_ch, kernel_size=1, padding=0),
+            act(True)
+        )
+
+    def to_weight(self, im_latent):
+        bs = im_latent.size(0)
+        return self.project_w(im_latent).view(bs*self.out_ch*8, self.vox_feat, 1,1,1)
+
+    def forward(self, vol_latent, im_latent):
+        bs = vol_latent.size(0)
+        vol_sz = vol_latent.shape[-3:]
+        return self.final_layers(F.conv3d(
+            vol_latent.view(1, bs*self.vox_feat, *vol_sz), # Mix BS with features to separate kernels for each batch item
+            self.to_weight(im_latent), # Reshape (and opt. project) image features to Conv kernels, so that each group operates on 1 item of a batch
+            groups=bs).reshape(bs, self.out_ch*8, *vol_sz)) # Reshape back to separate batch dim
 
 class Standard3dConvNet(nn.Module):
     def __init__(self, layers=[16, 32, 64], first_conv_ks=1, norm=nn.InstanceNorm3d):
@@ -74,20 +103,27 @@ class Standard3dConvNet(nn.Module):
     def forward(self, x): return self.net(x)
 
 class NeuralTF(nn.Module):
-    def __init__(self, backbone=resnet34(True), layers=[16, 32, 32], last_act=F.relu, norm=nn.InstanceNorm3d, first_conv_ks=1):
+    def __init__(self, backbone=resnet34(True), vol_backbone='standard', layers=[16, 32, 32], project='standard', last_act=nn.ReLU, norm=nn.InstanceNorm3d, first_conv_ks=1):
         super().__init__()
         self.im_backbone = backbone
         im_feat = self.im_backbone.fc.in_features
-        vox_feat = layers[-1]
         self.im_backbone.fc = Noop()
-        self.vol_backbone = Standard3dConvNet(layers=layers, norm=norm, first_conv_ks=first_conv_ks)
-        self.projection = Projection(im_feat, vox_feat, out_ch=4, act=last_act)
+        if vol_backbone == 'standard':
+            self.vol_backbone = Standard3dConvNet(layers=layers, norm=norm, first_conv_ks=first_conv_ks)
+            vox_feat = layers[-1]
+        elif vol_backbone == 'unet':
+            vox_feat = layers[-1]
+            self.vol_backbone = Unet3D(output_dim=vox_feat, last_act=last_act)
+
+        if project == 'standard':
+            self.projection = Projection(im_feat, vox_feat, out_ch=4, act=last_act)
+        elif project == 'plus':
+            self.projection = ProjectionPlus(im_feat, vox_feat, out_ch=4, act=last_act)
 
     def forward(self, render, volume):
         im_latent = self.im_backbone(render)
         vol_latent = self.vol_backbone(volume)
         return self.projection(vol_latent, im_latent) # Returns RGBO Volume
-
 
 class NeuralTF_Unet_Adain(nn.Module):
     def __init__(self, backbone=resnet34(True), last_act=nn.ReLU, style_dim=256):

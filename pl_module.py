@@ -19,6 +19,7 @@ from pytorch_lightning.metrics.functional import accuracy, confusion_matrix
 from ranger     import Ranger
 from ranger_adabelief import RangerAdaBelief
 from neuraltf_modules import NeuralTF, NeuralTF_Unet_Adain
+from unet3d import AdaptiveInstanceNorm3d
 from adaptive_wing_loss import AdaptiveWingLoss, NormalizedReLU, NegativeScaledReLU
 from ssim3d_torch import ssim3d
 
@@ -126,20 +127,15 @@ class NeuralTransferFunction(LightningModule):
             raise Exception(f'Invalid parameter backbone: {hparams.backbone}. Use either resnet18, resnet34, resnet50')
     # Output Activation
         if hparams.last_act == 'nrelu':
-            act_cls = NormalizedReLU
-            act = NormalizedReLU()
+            act = NormalizedReLU
         elif hparams.last_act == 'relu':
-            act_cls = nn.ReLU
-            act = F.relu
+            act = nn.ReLU
         elif hparams.last_act == 'nsrelu':
-            act_cls = NegativeScaledReLU
-            act = NegativeScaledReLU()
+            act = NegativeScaledReLU
         elif hparams.last_act == 'sigmoid':
-            act_cls = nn.Sigmoid
-            act = torch.sigmoid
+            act = nn.Sigmoid
         elif hparams.last_act == 'none':
-            act_cls = Noop
-            act = Noop()
+            act = Noop
         else:
             raise Exception(f'Invalid last activation given ({hparams.last_act}).')
     # Volume Backbone Normalization
@@ -155,11 +151,24 @@ class NeuralTransferFunction(LightningModule):
     # Initialize Network
         if   hparams.net == 'ConvProject':
             self.network = NeuralTF(backbone=im_backbone, first_conv_ks=hparams.first_conv_ks, last_act=act, norm=norm)
+        elif hparams.net == 'ConvProjectPlus':
+            self.network = NeuralTF(backbone=im_backbone, first_conv_ks=hparams.first_conv_ks, last_act=act, norm=norm, project='plus')
+        elif hparams.net == 'UnetProject':
+            self.network = NeuralTF(backbone=im_backbone, vol_backbone='unet', first_conv_ks=hparams.first_conv_ks, last_act=act, norm=norm)
+        elif hparams.net == 'UnetProjectPlus':
+            self.network = NeuralTF(backbone=im_backbone, vol_backbone='unet', first_conv_ks=hparams.first_conv_ks, last_act=act, norm=norm, project='plus')
         elif hparams.net == 'UnetAdain':
-            self.network = NeuralTF_Unet_Adain(backbone=im_backbone, last_act=act_cls)
+            self.network = NeuralTF_Unet_Adain(backbone=im_backbone, last_act=act)
         else:
             raise Exception(f'Invalid net parameter given ({hparams.net}). Choose either ConvProject or UnetAdain')
-
+    # AdaIN Initialization
+        if hparams.net == 'UnetAdain':
+            for name, l in self.network.named_modules():
+                if isinstance(l, AdaptiveInstanceNorm3d):
+                    torch.nn.init.normal_(l.var.weight, std=1e-2)
+                    torch.nn.init.constant_(l.var.bias, 1.0)
+                    torch.nn.init.normal(l.mu.weight, std=1e-2)
+                    torch.nn.init.constant_(l.mu.bias, 0.0)
 
     # Loss Function
         if hparams.loss == 'awl':
@@ -274,6 +283,12 @@ class NeuralTransferFunction(LightningModule):
         else:
             image_logs = {}
 
+        for name, m in self.network.named_modules():
+            if isinstance(m, AdaptiveInstanceNorm3d):
+                self.log(f'weight_norms/{name} Variance Weight Norm', torch.norm(m.var.weight))
+                self.log(f'weight_norms/{name} Variance Bias Norm', torch.norm(m.var.bias))
+                self.log(f'weight_norms/{name} Mean Weight Norm', torch.norm(m.mu.weight))
+                self.log(f'weight_norms/{name} Mean Bias Norm', torch.norm(m.mu.bias))
         return {
             'loss': loss,
             'mae': mae,
@@ -411,7 +426,7 @@ class NeuralTransferFunction(LightningModule):
         parser.add_argument('--lr_projection', default=1e-3, type=float, help='Learning Rate for the projection (MLP if exists)')
         parser.add_argument('--lr_im_backbone', default=1e-3, type=float, help='Learning Rate for the pretrained ResNet backbone')
         parser.add_argument('--lr_vol_backbone', default=1e-3, type=float, help='Learning Rate for the volume backbone')
-        parser.add_argument('--net', default='ConvProject', type=str, help='Model for the Neural TF. ConvProject or UnetAdain')
+        parser.add_argument('--net', default='ConvProject', type=str, help='Model for the Neural TF. ConvProject, ConvProjectPlus or UnetAdain')
         parser.add_argument('--first_conv_ks', default=1, type=int, help='Kernel Size of the first Conv layer in the NeuralNet representing the Transfer Function')
         parser.add_argument('--backbone', type=str, default='resnet34', help='What backbone to use. Either resnet18, 34 or 50')
         parser.add_argument('--no_pretrain', action='store_false', dest='pretrained', help='Enable to start from random init in the ResNet')
