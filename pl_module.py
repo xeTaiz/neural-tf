@@ -28,7 +28,7 @@ from torchvtk.utils     import make_4d, make_5d, make_nd, apply_tf_torch, tex_fr
 from torchvtk.utils.tf_generate import make_trapezoid, colorize_trapeze, tf_pts_border, flatten_clip_sort_peaks, TFGenerator
 from torchvtk.transforms import Composite, Lambda
 from torchvision.transforms.functional import hflip
-from torchvision.transforms import ColorJitter
+from torchvision.transforms import ColorJitter, RandomAffine
 
 from torchvtk.rendering import show, show_tf, plot_tfs, plot_render_2tf, plot_render_tf
 
@@ -228,7 +228,13 @@ class NeuralTransferFunction(LightningModule):
             render_input = render_gt[:, :3]
         tf_pts    = batch['tf_pts']
         if torch.is_tensor(tf_pts): tf_pts = [t for t in tf_pts]
-        vols = torch.stack([self.volumes[n[:n.rfind('_')]]['vol'] for n in batch['name']]).to(dtype).to(render_gt.device)
+        if self.hparams.train_any_vol: # Load random volumes
+            idx = torch.randperm(len(self.volumes))[:render_gt.size(0)]
+            vol_keys = list(self.volumes.keys())
+            idx = [vol_keys[i] for i in idx]
+            vols = torch.stack([self.volumes[n]['vol'] for n in idx]).to(dtype).to(render_gt.device)
+        else: # Load the volumes seen in the input renders
+            vols = torch.stack([self.volumes[n[:n.rfind('_')]]['vol'] for n in batch['name']]).to(dtype).to(render_gt.device)
 
         rgbo_pred = self.forward(render_input, vols)
         rgbo_targ = apply_tf_torch(vols, tf_pts)
@@ -346,14 +352,13 @@ class NeuralTransferFunction(LightningModule):
         pass
     def transform(self, train):
         def train_augment(image):
-            # image[:3] = ColorJitter(0.05, 0.05, 0.05, 0.01)(image[:3])
-            # image[:3] = normalize(image[:3], [0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+            rot_tfm = RandomAffine(degrees=10.0)
             if (torch.rand(1) > 0.5).all():
                 image = hflip(image)
+            image = rot_tf(image)
             return image
 
         def test_augment(image):
-            # image[:3] = normalize(image[:3], [0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
             return image
 
         if train and not self.hparams.overfit: return Composite(
@@ -442,4 +447,5 @@ class NeuralTransferFunction(LightningModule):
         parser.add_argument('--one_vol', action='store_true', help='Modify dataset splitting to work on single volume datasets')
         parser.add_argument('--num_images_logged', type=int, default=10, help='Number of slices / TFs logged during validation epoch')
         parser.add_argument('--max-train-samples', type=int, default=None, help='Restrict training dataset to given amount of samples')
+        parser.add_argument('--train-any-vol', action='store_true', help='Train on predicting the TF seen for a random volume, instead of the volume seen in the rendering')
         return parser
