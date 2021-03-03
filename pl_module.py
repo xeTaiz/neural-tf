@@ -51,10 +51,10 @@ class WeightedMAELoss(nn.Module):
     def forward(self, pred, targ, weight=1):
         return torch.mean(F.l1_loss(pred, targ, reduction='none') * weight)
 
-class WeightedSSIMLoss(nn.Module):
+class WeightedDSSIMLoss(nn.Module):
     def __init__(self): super().__init__()
     def forward(self, pred, targ, weight=1):
-        return torch.mean(ssim3d(pred, targ, return_average=False) * weight)
+        return 1.0 - torch.mean(ssim3d(pred, targ, return_average=False) * weight)
 
 class Noop(nn.Module):
     def __init__(self, *args, **kwargs): super().__init__()
@@ -178,7 +178,7 @@ class NeuralTransferFunction(LightningModule):
         elif hparams.loss == 'mae':
             self.loss = WeightedMAELoss()
         elif hparams.loss == 'ssim':
-            self.loss = WeightedSSIMLoss()
+            self.loss = WeightedDSSIMLoss()
         else:
             raise Exception(f'Invalid loss given ({hparams.loss}). Valid choices are mse, mae and awl')
     # Preload volumes for Training
@@ -238,8 +238,11 @@ class NeuralTransferFunction(LightningModule):
 
         rgbo_pred = self.forward(render_input, vols)
         rgbo_targ = apply_tf_torch(vols, tf_pts)
-        w = torch.ones_like(rgbo_targ)
-        w[:, 3][rgbo_targ[:, 3] > 1e-2] *= self.hparams.opacity_weight
+        if self.hparams.opacity_weight == 1:
+            w = 1
+        else:
+            w = torch.ones_like(rgbo_targ)
+            w[:, 3][rgbo_targ[:, 3] > 1e-2] *= self.hparams.opacity_weight
         loss = self.loss(rgbo_pred, rgbo_targ, weight=w)
         mae = F.l1_loss(rgbo_pred.detach(), rgbo_targ)
 
@@ -262,8 +265,11 @@ class NeuralTransferFunction(LightningModule):
         rgbo_pred = self.forward(render_input, vols)
         tf_pred_tex, _ = self.infer_1d_tex(render_input[0], vols[0])
         rgbo_targ = apply_tf_torch(vols, tf_pts)
-        w = torch.ones_like(rgbo_targ)
-        w[:, 3][rgbo_targ[:, 3] > 1e-2] *= self.hparams.opacity_weight
+        if self.hparams.opacity_weight == 1:
+            w = 1
+        else:
+            w = torch.ones_like(rgbo_targ)
+            w[:, 3][rgbo_targ[:, 3] > 1e-2] *= self.hparams.opacity_weight
 
         loss = self.loss(rgbo_pred, rgbo_targ, weight=w)
         mae = F.l1_loss(rgbo_pred, rgbo_targ)
@@ -434,7 +440,7 @@ class NeuralTransferFunction(LightningModule):
         parser.add_argument('--net', default='ConvProject', type=str, help='Model for the Neural TF. ConvProject, ConvProjectPlus or UnetAdain')
         parser.add_argument('--first_conv_ks', default=1, type=int, help='Kernel Size of the first Conv layer in the NeuralNet representing the Transfer Function')
         parser.add_argument('--backbone', type=str, default='resnet34', help='What backbone to use. Either resnet18, 34 or 50')
-        parser.add_argument('--no_pretrain', action='store_false', dest='pretrained', help='Enable to start from random init in the ResNet')
+        parser.add_argument('--pretrain', action='store_true', dest='pretrained', help='Enable to start from random init in the ResNet')
         parser.add_argument('--weight_decay',  default=1e-6, type=float, help='Weight decay for training.')
         parser.add_argument('--batch_size',    default=16,     type=int,   help='Batch Size')
         parser.add_argument('--opt', type=str, default='Ranger', help='Optimizer to use. One of Ranger, Adam')
