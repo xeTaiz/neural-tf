@@ -14,7 +14,7 @@ def get_gaussian1d(size, sigma, dtype=torch.float32):
     return gauss.to(dtype)
 
 def filter_gaussian_separated(input, win):
-    win = win.to(input.dtype).to(input.device)
+    win = win.to(input.dtype).to(input.device).expand(input.size(1), -1,-1,-1,-1)
     out = F.conv3d(input, win,                groups=input.size(1))
     out = F.conv3d(out,   win.transpose(3,4), groups=input.size(1))
     out = F.conv3d(out,   win.transpose(2,4), groups=input.size(1))
