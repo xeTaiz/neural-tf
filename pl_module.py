@@ -336,8 +336,8 @@ class NeuralTransferFunction(LightningModule):
             {'params': self.network.im_backbone.parameters(), 'lr': self.hparams.lr_im_backbone},
             {'params': self.network.vol_backbone.parameters(), 'lr': self.hparams.lr_vol_backbone},
         ]
-        if self.hparams.net == 'ConvProject':
-            params.append({'params': self.network.projection.parameters(), 'lr': self.hparams.lr_projection})
+        if 'Project' in self.hparams.net:
+            params.append({'params': self.network.projection.parameters(), 'lr': self.hparams.lr_projection, 'weight_decay': 1e-4})
 
         if  self.hparams.opt.lower() == 'ranger':
             opt = Ranger(params, weight_decay=self.hparams.weight_decay)
@@ -442,7 +442,7 @@ class NeuralTransferFunction(LightningModule):
         parser.add_argument('--backbone', type=str, default='resnet34', help='What backbone to use. Either resnet18, 34 or 50')
         parser.add_argument('--pretrain', action='store_true', dest='pretrained', help='Enable to start from random init in the ResNet')
         parser.add_argument('--weight_decay',  default=1e-6, type=float, help='Weight decay for training.')
-        parser.add_argument('--batch_size',    default=16,     type=int,   help='Batch Size')
+        parser.add_argument('--batch_size',    default=4,     type=int,   help='Batch Size')
         parser.add_argument('--opt', type=str, default='Ranger', help='Optimizer to use. One of Ranger, Adam')
         parser.add_argument('--loss', type=str, default='mse', help='Loss Function to use')
         parser.add_argument('--opacity-weight', type=float, default=1.0, help='Weights the loss higher for opacity (>1e-2)')
