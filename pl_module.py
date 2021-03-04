@@ -361,7 +361,7 @@ class NeuralTransferFunction(LightningModule):
             rot_tfm = RandomAffine(degrees=10.0)
             if (torch.rand(1) > 0.5).all():
                 image = hflip(image)
-            image = rot_tf(image)
+            image = rot_tfm(image)
             return image
 
         def test_augment(image):
