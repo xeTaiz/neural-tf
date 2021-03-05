@@ -56,7 +56,8 @@ if __name__=='__main__':
     # Setup Model, Logger, Trainer
     if args.overfit:
         args.preload = True
-        args.max_train_samples = 4
+        if args.one_vol:
+            args.max_train_samples = 4
     model = NeuralTransferFunction(hparams=args) # Must be AFTER prepare_data(), because it messes with multiprocessing
     print(model)
     run_id = str(uuid.uuid4())[:6]

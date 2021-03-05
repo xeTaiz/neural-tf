@@ -228,10 +228,9 @@ class NeuralTransferFunction(LightningModule):
             render_input = render_gt[:, :3]
         tf_pts    = batch['tf_pts']
         if torch.is_tensor(tf_pts): tf_pts = [t for t in tf_pts]
-        if self.hparams.train_any_vol: # Load random volumes
-            idx = torch.randperm(len(self.volumes))[:render_gt.size(0)]
-            vol_keys = list(self.volumes.keys())
-            idx = [vol_keys[i] for i in idx]
+        if self.hparams.train_any_vol and not self.hparams.one_vol: # Load random volumes
+            idx = torch.randperm(len(self.train_names))[:render_gt.size(0)]
+            idx = [self.train_names[i] for i in idx]
             vols = torch.stack([self.volumes[n]['vol'] for n in idx]).to(dtype).to(render_gt.device)
         else: # Load the volumes seen in the input renders
             vols = torch.stack([self.volumes[n[:n.rfind('_')]]['vol'] for n in batch['name']]).to(dtype).to(render_gt.device)
@@ -383,10 +382,12 @@ class NeuralTransferFunction(LightningModule):
             ffn = lambda p: int(p.name[p.name.rfind('_')+1:-3]) <= split
         else:
             names = list(set(map(lambda n: n[:n.rfind('_')], os.listdir(Path(self.hparams.trainds)))))
-            split_idx = math.floor(0.8 * len(names))
-            train_names = names[:split_idx]
-            ffn = lambda p: p.name[:p.name.rfind('_')] in train_names
-            print('train names: ', train_names)
+            split = math.floor(0.8 * len(names))
+            if self.hparams.max_train_samples is not None:
+                split = min(self.hparams.max_train_samples, split)
+            self.train_names = names[:split]
+            ffn = lambda p: p.name[:p.name.rfind('_')] in self.train_names
+            print('Train Volume Names: ', self.train_names)
         ds = TorchDataset(self.hparams.trainds,
             filter_fn=ffn,
             preprocess_fn=self.transform(train=True)
@@ -411,9 +412,9 @@ class NeuralTransferFunction(LightningModule):
         else:
             names = list(set(map(lambda n: n[:n.rfind('_')], os.listdir(Path(self.hparams.trainds)))))
             split_idx = math.floor(0.8 * len(names))
-            valid_names = names[split_idx:]
-            ffn = lambda p: p.name[:p.name.rfind('_')] in valid_names
-            print('valid names: ', valid_names)
+            self.valid_names = names[split_idx:]
+            ffn = lambda p: p.name[:p.name.rfind('_')] in self.valid_names
+            print('valid names: ', self.valid_names)
         ds = TorchDataset(self.hparams.trainds,
             filter_fn=ffn,
             preprocess_fn=self.transform(train=False)
