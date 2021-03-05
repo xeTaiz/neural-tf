@@ -397,9 +397,9 @@ class NeuralTransferFunction(LightningModule):
             ds = ds.preload()
         dl = torch.utils.data.DataLoader(ds,
             batch_size=self.hparams.batch_size,
-            collate_fn=dict_collate_fn,
+            collate_fn=partial(dict_collate_fn, warn_when_unstackable=False),
             shuffle=True,
-            num_workers=0 if self.hparams.preload else 6
+            num_workers=0 if self.hparams.preload else 4
         )
         print(f'Train DataLoader length: {len(dl)}')
         return dl
@@ -423,8 +423,8 @@ class NeuralTransferFunction(LightningModule):
             ds = ds.preload()
         return torch.utils.data.DataLoader(ds,
             batch_size=self.hparams.batch_size,
-            collate_fn=dict_collate_fn,
-            num_workers=0 if self.hparams.preload else 6
+            collate_fn=partial(dict_collate_fn, warn_when_unstackable=False),
+            num_workers=0 if self.hparams.preload else 4
         )
 
     def get_progress_bar_dict(self):
