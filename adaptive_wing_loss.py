@@ -41,7 +41,7 @@ class AdaptiveWingLoss(nn.Module):
             pred (torch.Tensor): Prediction. Shape must be more than 1D, same as `target`
             target (torch.Tensor): Target. Shape must be more than 1D, same as `pred`
         '''
-        if weight is None:
+        if weight is None or weight==1:
             weight = torch.ones_like(target)
         y = target
         y_hat = pred
