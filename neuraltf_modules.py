@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from torchvision.models import resnet34
 from unet3d import Unet3D, AdaptiveInstanceNorm3d
 
+from torchvtk.utils import apply_tf_torch
 #%%
 
 def mish(x): return x * torch.tanh(F.softplus(x))
@@ -143,3 +144,71 @@ class NeuralTF_Unet_Adain(nn.Module):
     def forward(self, render, volume):
         style = self.to_style(self.im_backbone(render))
         return self.vol_backbone(volume, style)
+
+
+class NeuralTF_Novol(nn.Module):
+    def __init__(self, im_feat, last_act=nn.ReLU, pre_layers=[], post_layers=[256, 256, 256, 128], skip_to_last=True, out_ch=4):
+        ''' NeRF-like Neural Transfer Function: Intensity -> RGBA
+
+        Args:
+            im_feat (int): Number of features of the image descriptor
+            last_act (nn.Module, optional): Activation Function for last layer. Defaults to nn.ReLU.
+            pre_layers ([int], optional): List of ints for MLPs before the image descriptor is injected. Defaults to [].
+            post_layers ([int], optional): List of ints for MLPs after image descriptor is injected. Defaults to [256, 256, 256, 128].
+            skip_to_last (bool, optional): Whether to insert the input intensity in the last layer as well. Defaults to True.
+            out_ch (int, optional): Number of output channels. Defaults to 4.
+        '''
+        super().__init__()
+        self.skip_to_last = skip_to_last
+        self.out_ch = out_ch
+        if pre_layers:
+            pre = [
+                nn.Sequential(
+                    nn.Linear(nin, nout),
+                    nn.ReLU(True)
+                )
+                for nin, nout in zip([1] + pre_layers, pre_layers)
+            ]
+            pre_out = pre_layers[-1]  # Number of features coming out of pre
+        else:
+            pre = [Noop()]  # Do nothing
+            pre_out = 1     # Just intensity
+        post = [
+            nn.Sequential(
+                nn.Linear(nin, nout),
+                nn.ReLU(True)
+            )
+            for nin, nout in zip([pre_out + im_feat] + post_layers, post_layers)
+        ]
+        self.neural_tf_pre = nn.Sequential(*pre)
+        self.neural_tf_post = nn.Sequential(*post)
+        # Inserts input intensity to last layer as well
+        last_in = post_layers[-1] + 1 if skip_to_last else post_layers[-1]
+        self.neural_tf_last = nn.Sequential(
+            nn.Linear(last_in, out_ch),
+            last_act(True)
+        )
+    def forward(self, im_feat, samples):
+        ''' Run Neural Transfer function for `im_feat` style and samples
+
+        Args:
+            im_feat (Tensor): Image feature vector (BS, F)
+            samples (Tensor): Intensity samples to predict (BS, NS, 1)
+
+        Returns:
+            Tensor: Resulting RGBA predictions (BS, NS, 4)
+        '''
+        bs, ns = im_feat.size(0), samples.size(1)
+        im_feat = im_feat.repeat(ns, 1)
+        samples = samples.reshape(bs*ns, 1)
+
+        x = self.neural_tf_pre(samples)
+        x = torch.cat([x, im_feat], dim=-1)
+        x = self.neural_tf_post(x)
+        if self.skip_to_last:
+            x = torch.cat([x, samples], dim=-1)
+        # Last Layer       -> (BS*NS, 4) ->  (BS, NS, 4)       ->  (BS, 4, NS)
+        return self.neural_tf_last(x).reshape(bs, ns, self.out_ch).permute(0,2,1).contiguous()
+
+
+# %%
