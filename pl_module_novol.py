@@ -182,7 +182,9 @@ class NeuralTransferFunction(LightningModule):
         tf_pts    = batch['tf_pts']
         if torch.is_tensor(tf_pts): tf_pts = [t for t in tf_pts]
         # Intensity Samples and their according target RGBA
-        samples = sample_uniform(ns, dtype=dtype, device=render_gt.device).expand(bs, -1, -1) # (BS, NS, 1)
+        usamples = sample_uniform(ns//2, dtype=dtype, device=render_gt.device).expand(bs, -1, -1) # (BS, NS, 1)
+        rsamples = sample_random_uniform(ns//2, 1, dtype=dtype, device=render_gt.device).expand(bs, -1, -1)
+        samples = torch.cat([usamples, rsamples], dim=1)
         targ = apply_tf_torch(samples.view(bs, 1, 1, ns, 1), tf_pts).view(bs, 4, ns)
         # Predict
         im_feat = self.im_backbone(render_input)
