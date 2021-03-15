@@ -134,7 +134,6 @@ class NeuralTransferFunction(LightningModule):
     # Image Backbone
         if self.hparams.backbone == 'resnet18':
             self.im_backbone = resnet18(pretrained=hparams.pretrained)
-            im_feat = 512
         elif self.hparams.backbone == 'resnet34':
             self.im_backbone = resnet34(pretrained=hparams.pretrained)
         elif self.hparams.backbone == 'resnet50':
@@ -196,7 +195,33 @@ class NeuralTransferFunction(LightningModule):
         self.log('metrics/train_loss', loss.detach().cpu(), prog_bar=True)
         self.log('metrics/train_mae', mae.detach().cpu(), prog_bar=True)
 
-        return loss
+        if batch_idx < self.hparams.num_images_logged:
+            pred_tf_tex = pred.detach().permute(0, 2, 1) # to (BS, 4, NS)
+
+            image_logs = {
+                'render': render_gt[[0]].detach().cpu().float(),
+                'tf_pred': pred_tf_tex[[0]].cpu().float(),
+                'tf_targ': [tf_pts[0].cpu().float()]
+            }
+        else:
+            image_logs = {}
+
+        return {
+            'loss': loss,
+            **image_logs
+        }
+
+    def training_epoch_end(self, outputs):
+        n = self.hparams.num_images_logged
+        renders = torch.cat([o['render'] for o in outputs[:n]], dim=0)
+        tf_pred = torch.cat([o['tf_pred'] for o in outputs[:n]], dim=0)
+        tf_targ = [tf for o in outputs[:n] for tf in o['tf_targ']]
+
+        self.log_dict({
+            f'figs/train_tf_comp{i}': wandb.Image(
+                fig_to_img(plot_render_2tf(ren, tfp, tft)))
+                for i, ren, tfp, tft in zip(count(), renders, tf_pred, tf_targ)
+        })
 
     def validation_step(self, batch, batch_idx):
         dtype = torch.float16 if self.hparams.precision == 16 else torch.float32
@@ -354,13 +379,12 @@ class NeuralTransferFunction(LightningModule):
     @staticmethod
     def add_model_specific_args(parent_parser):
         parser = ArgumentParser(parents=[parent_parser], add_help=False)
-        parser.add_argument('--lr_im_backbone', default=1e-4, type=float, help='Learning Rate for the pretrained ResNet backbone')
-        parser.add_argument('--lr_neural_tf', default=1e-3, type=float, help='Learning Rate for the volume backbone')
-        parser.add_argument('--net', default='ConvProject', type=str, help='Model for the Neural TF. ConvProject, ConvProjectPlus or UnetAdain')
+        parser.add_argument('--lr_im_backbone', default=1e-5, type=float, help='Learning Rate for the pretrained ResNet backbone')
+        parser.add_argument('--lr_neural_tf', default=1e-4, type=float, help='Learning Rate for the volume backbone')
         parser.add_argument('--backbone', type=str, default='resnet34', help='What backbone to use. Either resnet18, 34 or 50')
         parser.add_argument('--pretrain', action='store_true', dest='pretrained', help='Enable to start from random init in the ResNet')
         parser.add_argument('--weight_decay',  default=1e-6, type=float, help='Weight decay for training.')
-        parser.add_argument('--batch_size',    default=4,     type=int,   help='Batch Size')
+        parser.add_argument('--batch_size',    default=16,     type=int,   help='Batch Size')
         parser.add_argument('--opt', type=str, default='Ranger', help='Optimizer to use. One of Ranger, Adam')
         parser.add_argument('--loss', type=str, default='mse', help='Loss Function to use')
         parser.add_argument('--opacity-weight', type=float, default=1.0, help='Weights the loss higher for opacity (>1e-2)')
@@ -370,5 +394,5 @@ class NeuralTransferFunction(LightningModule):
         parser.add_argument('--one_vol', action='store_true', help='Modify dataset splitting to work on single volume datasets')
         parser.add_argument('--num_images_logged', type=int, default=10, help='Number of slices / TFs logged during validation epoch')
         parser.add_argument('--max-train-samples', type=int, default=None, help='Restrict training dataset to given amount of samples')
-        parser.add_argument('--n-intensity-samples', type=int, default=128, help='Number of samples used to train the neural transfer fucntion')
+        parser.add_argument('--n-intensity-samples', type=int, default=256, help='Number of samples used to train the neural transfer fucntion')
         return parser

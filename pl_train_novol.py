@@ -69,7 +69,7 @@ if __name__=='__main__':
     ckpt_path = logger.experiment.dir + '/checkpoints'
     ckpt_cb = ModelCheckpoint(dirpath=ckpt_path, filename='{epoch}-{val_loss:.4f}-{val_mae:.2f}',save_top_k=1, verbose=True, monitor='val_loss', mode='min', save_last=True)
     es_cb = EarlyStopping(monitor='val_loss', mode='min', patience=5)
-    callbacks = [ckpt_cb, es_cb] if not args.dev or args.overfit else []
+    callbacks = [ckpt_cb, es_cb] if not (args.dev or args.overfit) else []
     # if not args.overfit: callbacks.append(QueueUsageLogging(train_dl.dataset))
 
     trainer = Trainer.from_argparse_args(args,
