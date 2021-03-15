@@ -124,8 +124,19 @@ def sample_hist_weighted(n_samples, vol, as_hist=False):
     raise Exception('not implemented yet')
 
 def sample_tf_weighted(n_samples, tf, as_pts=True, **kwargs):
-    tf_tex = apply_tf_tex(torch.linspace(0,1,256)) if as_pts else tf
-    raise Exception('not implemented yet')
+    tf_tex = tex_from_pts(tf, resolution=4096) if as_pts else tf
+    if tf_tex.ndim == 3: # Batched
+        op_normed = tf_tex[:, 3]
+        op_normed /= op_normed.sum(dim=-1)
+        samples = torch.stack([torch.from_numpy(np.random.chocie(np.linspace(0,1,4096), size=(n_samples,1), p=op))
+            for op in op_normed]).to(tf.dtype).to(tf.device)
+    else: # Single item
+        op_normed = tf_tex[3]
+        op_normed /= op_normed.sum(dim=-1)
+        samples = torch.from_numpy(np.random.choice(np.linspace(0,1,4096), size=(n_samples,1), p=op_normed.numpy())
+            ).to(tf.dtype).to(tf.device)
+
+    return torch.clamp(samples + torch.randn_like(samples) / 4096, 0, 1)
 
 class NeuralTransferFunction(LightningModule):
     def __init__(self, hparams):
