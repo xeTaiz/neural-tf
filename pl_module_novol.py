@@ -127,13 +127,13 @@ def sample_tf_weighted(n_samples, tf, as_pts=True, **kwargs):
     tf_tex = tex_from_pts(tf, resolution=4096) if as_pts else tf
     if tf_tex.ndim == 3: # Batched
         op_normed = tf_tex[:, 3]
-        op_normed /= op_normed.sum(dim=-1)
-        samples = torch.stack([torch.from_numpy(np.random.chocie(np.linspace(0,1,4096), size=(n_samples,1), p=op))
-            for op in op_normed]).to(tf.dtype).to(tf.device)
+        op_normed /= op_normed.sum(dim=-1, keepdim=True)
+        samples = torch.stack([torch.from_numpy(np.random.choice(np.linspace(0,1,4096), size=(n_samples,1), p=op))
+            for op in op_normed.cpu().numpy()]).to(tf[0].dtype).to(tf[0].device)
     else: # Single item
         op_normed = tf_tex[3]
         op_normed /= op_normed.sum(dim=-1)
-        samples = torch.from_numpy(np.random.choice(np.linspace(0,1,4096), size=(n_samples,1), p=op_normed.numpy())
+        samples = torch.from_numpy(np.random.choice(np.linspace(0,1,4096), size=(n_samples,1), p=op_normed.cpu().numpy())
             ).to(tf.dtype).to(tf.device)
 
     return torch.clamp(samples + torch.randn_like(samples) / 4096, 0, 1)
@@ -193,8 +193,9 @@ class NeuralTransferFunction(LightningModule):
         if torch.is_tensor(tf_pts): tf_pts = [t for t in tf_pts]
         # Intensity Samples and their according target RGBA
         usamples = sample_uniform(ns//2, dtype=dtype, device=render_gt.device).expand(bs, -1, -1) # (BS, NS, 1)
-        rsamples = sample_random_uniform(ns//2, 1, dtype=dtype, device=render_gt.device).expand(bs, -1, -1)
-        samples = torch.cat([usamples, rsamples], dim=1)
+        osamples = sample_tf_weighted(ns//2, tf_pts, as_pts=True)
+        # rsamples = sample_random_uniform(ns//2, 1, dtype=dtype, device=render_gt.device).expand(bs, -1, -1)
+        samples = torch.cat([usamples, osamples], dim=1)
         targ = apply_tf_torch(samples.view(bs, 1, 1, ns, 1), tf_pts).view(bs, 4, ns)
         # Predict
         im_feat = self.im_backbone(render_input)
