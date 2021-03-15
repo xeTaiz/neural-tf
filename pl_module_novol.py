@@ -157,7 +157,7 @@ class NeuralTransferFunction(LightningModule):
         else:
             raise Exception(f'Invalid last activation given ({hparams.last_act}).')
     # Initialize Network
-        self.network = NeuralTF_Novol(im_feat, last_act=act)
+        self.network = NeuralTF_Novol(im_feat, pre_layers=[256, 256], last_act=act)
     # Loss Function
         if hparams.loss == 'awl':
             self.loss = AdaptiveWingLoss()
