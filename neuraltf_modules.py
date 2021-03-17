@@ -146,8 +146,22 @@ class NeuralTF_Unet_Adain(nn.Module):
         return self.vol_backbone(volume, style)
 
 
+class PositionalEncoding(nn.Module):
+    def __init__(self, log_sampling=True, input_dims=1, include_input=True, num_freqs=30, max_freq_log2=10):
+        super().__init__()
+        if log_sampling:
+            self.freq_bands = 2.**torch.linspace(0, max_freq_log2, num_freqs)
+        else:
+            self.freq_bands = torch.linspace(2.**0, 2.**max_freq_log2, num_freqs)
+        fns = [torch.sin, torch.cos]
+        self.embed_fns = [lambda x, f=freq, fn=fn_: fn(x * f) for fn_ in fns for freq in self.freq_bands]
+        self.out_dim = len(self.embed_fns)
+
+    def forward(self, x):
+        return torch.cat([fn(x) for fn in self.embed_fns], dim=-1)
+
 class NeuralTF_Novol(nn.Module):
-    def __init__(self, im_feat, last_act=nn.ReLU, pre_layers=[], post_layers=[256, 256, 256, 128], skip_to_last=True, out_ch=4):
+    def __init__(self, im_feat, last_act=nn.ReLU, pre_layers=[], post_layers=[256, 256, 256, 128], skip_to_last=True, positional_encoding=True, out_ch=4):
         ''' NeRF-like Neural Transfer Function: Intensity -> RGBA
 
         Args:
@@ -156,23 +170,33 @@ class NeuralTF_Novol(nn.Module):
             pre_layers ([int], optional): List of ints for MLPs before the image descriptor is injected. Defaults to [].
             post_layers ([int], optional): List of ints for MLPs after image descriptor is injected. Defaults to [256, 256, 256, 128].
             skip_to_last (bool, optional): Whether to insert the input intensity in the last layer as well. Defaults to True.
+            positional_encoding (bool, optional): Whether positional encoding is used, as in NeRF
             out_ch (int, optional): Number of output channels. Defaults to 4.
         '''
         super().__init__()
         self.skip_to_last = skip_to_last
         self.out_ch = out_ch
+        if positional_encoding:
+            self.encode_input = PositionalEncoding()
+            in_dim = 60
+        else:
+            self.encode_input = Noop()
+            in_dim = 1
+
+
         if pre_layers:
             pre = [
                 nn.Sequential(
                     nn.Linear(nin, nout),
                     nn.ReLU(True)
                 )
-                for nin, nout in zip([1] + pre_layers, pre_layers)
+                for nin, nout in zip([in_dim] + pre_layers, pre_layers)
             ]
             pre_out = pre_layers[-1]  # Number of features coming out of pre
         else:
             pre = [Noop()]  # Do nothing
-            pre_out = 1     # Just intensity
+            pre_out = in_dim # Just intensity (possibly encoded)
+
         post = [
             nn.Sequential(
                 nn.Linear(nin, nout),
@@ -183,7 +207,7 @@ class NeuralTF_Novol(nn.Module):
         self.neural_tf_pre = nn.Sequential(*pre)
         self.neural_tf_post = nn.Sequential(*post)
         # Inserts input intensity to last layer as well
-        last_in = post_layers[-1] + 1 if skip_to_last else post_layers[-1]
+        last_in = post_layers[-1] + in_dim if skip_to_last else post_layers[-1]
         self.neural_tf_last = nn.Sequential(
             nn.Linear(last_in, out_ch),
             last_act(True)
@@ -200,7 +224,7 @@ class NeuralTF_Novol(nn.Module):
         '''
         bs, ns = im_feat.size(0), samples.size(1)
         im_feat = im_feat.repeat(ns, 1)
-        samples = samples.reshape(bs*ns, 1)
+        samples = self.encode_input(samples.reshape(bs*ns, 1))
 
         x = self.neural_tf_pre(samples)
         x = torch.cat([x, im_feat], dim=-1)
