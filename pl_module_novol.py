@@ -290,6 +290,11 @@ class NeuralTransferFunction(LightningModule):
         self.log('metrics/val_loss', val_loss)
         self.log('metrics/val_mae', torch.stack([o['mae'] for o in outputs]).mean())
 
+        for name, m in self.network.named_modules():
+            if hasattr(m, 'weight'):
+                self.log(f'weight_norms/{name}  Weight Norm', torch.norm(m.weight))
+                self.log(f'weight_norms/{name}  Bias Norm', torch.norm(m.bias))
+
     def configure_optimizers(self):
         params = [
             {'params': self.network.parameters(), 'lr': self.hparams.lr_neural_tf},
@@ -392,7 +397,7 @@ class NeuralTransferFunction(LightningModule):
     def add_model_specific_args(parent_parser):
         parser = ArgumentParser(parents=[parent_parser], add_help=False)
         parser.add_argument('--lr_im_backbone', default=1e-5, type=float, help='Learning Rate for the pretrained ResNet backbone')
-        parser.add_argument('--lr_neural_tf', default=1e-4, type=float, help='Learning Rate for the volume backbone')
+        parser.add_argument('--lr_neural_tf', default=1e-3, type=float, help='Learning Rate for the volume backbone')
         parser.add_argument('--backbone', type=str, default='resnet34', help='What backbone to use. Either resnet18, 34 or 50')
         parser.add_argument('--pretrain', action='store_true', dest='pretrained', help='Enable to start from random init in the ResNet')
         parser.add_argument('--weight_decay',  default=1e-6, type=float, help='Weight decay for training.')
