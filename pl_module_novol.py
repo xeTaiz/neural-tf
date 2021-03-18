@@ -167,7 +167,10 @@ class NeuralTransferFunction(LightningModule):
         else:
             raise Exception(f'Invalid last activation given ({hparams.last_act}).')
     # Initialize Network
-        self.network = NeuralTF_Novol(im_feat, pre_layers=[256, 256], last_act=act, positional_encoding=hparams.positional_encoding)
+        pre = [] if hparams.no_pre else [256, 256, 256]
+        post = [256, 256, 256, 256, 128]
+        self.network = NeuralTF_Novol(im_feat, pre_layers=pre, post_layers=post, last_act=act,
+            positional_encoding=hparams.positional_encoding, skip_to_last=hparams.skip_to_last)
     # Loss Function
         if hparams.loss == 'awl':
             self.loss = AdaptiveWingLoss()
@@ -413,4 +416,6 @@ class NeuralTransferFunction(LightningModule):
         parser.add_argument('--max-train-samples', type=int, default=None, help='Restrict training dataset to given amount of samples')
         parser.add_argument('--n-intensity-samples', type=int, default=256, help='Number of samples used to train the neural transfer fucntion')
         parser.add_argument('--positional-encoding', action='store_true', help='If set uses positional encoding to 30 sin and 30 cos bases for the input intensity, as in NeRF')
+        parser.add_argument('--skip-to-last', action='store_true', help='Add skip connection from input (positional encoding) to last layer')
+        parser.add_argument('--no-pre', action='store_true', help='No NeuralTF layers before adding image descriptor (latent vector)')
         return parser
