@@ -24,6 +24,7 @@ class View(nn.Module):
     def __init__(self, *shape, exclude_batch_dim=True):
         super().__init__()
         self.shape = shape
+        self.exclude_batch_dim = exclude_batch_dim
 
     def forward(self, x):
         if self.exclude_batch_dim:
@@ -235,4 +236,21 @@ class NeuralTF_Novol(nn.Module):
         return self.neural_tf_last(x).reshape(bs, ns, self.out_ch).permute(0,2,1).contiguous()
 
 
+
+class NeuralTF_Texture(nn.Module):
+    def __init__(self, im_feat, last_act=nn.ReLU, layers=[512, 512, 512], out_res=128, out_ch=4):
+        super().__init__()
+        feat = [im_feat] + layers
+        layers = [ nn.Sequential(
+            nn.Linear(nin, nout),
+            nn.ReLU(True)
+        ) for nin, nout in zip(feat, feat[1:])]
+        self.layers = nn.Sequential(*layers)
+        self.last_layer = nn.Sequential(
+            nn.Linear(feat[-1], out_res*out_ch),
+            last_act(True),
+            View(out_ch, out_res)
+        )
+    def forward(self, x):
+        return self.last_layer(self.layers(x))
 # %%
