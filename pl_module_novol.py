@@ -396,11 +396,11 @@ class NeuralTransferFunction(LightningModule):
     @staticmethod
     def add_model_specific_args(parent_parser):
         parser = ArgumentParser(parents=[parent_parser], add_help=False)
-        parser.add_argument('--lr_im_backbone', default=1e-5, type=float, help='Learning Rate for the pretrained ResNet backbone')
+        parser.add_argument('--lr_im_backbone', default=1e-3, type=float, help='Learning Rate for the pretrained ResNet backbone')
         parser.add_argument('--lr_neural_tf', default=1e-3, type=float, help='Learning Rate for the volume backbone')
         parser.add_argument('--backbone', type=str, default='resnet34', help='What backbone to use. Either resnet18, 34 or 50')
         parser.add_argument('--pretrain', action='store_true', dest='pretrained', help='Enable to start from random init in the ResNet')
-        parser.add_argument('--weight_decay',  default=1e-6, type=float, help='Weight decay for training.')
+        parser.add_argument('--weight_decay',  default=1e-5, type=float, help='Weight decay for training.')
         parser.add_argument('--batch_size',    default=16,     type=int,   help='Batch Size')
         parser.add_argument('--opt', type=str, default='Ranger', help='Optimizer to use. One of Ranger, Adam')
         parser.add_argument('--loss', type=str, default='mse', help='Loss Function to use')
