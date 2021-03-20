@@ -179,14 +179,18 @@ class NeuralTransferFunction(LightningModule):
             raise Exception(f'Invalid loss given ({hparams.loss}). Valid choices are mse, mae and awl')
 
     def forward(self, render):
-        return self.network(render)
+        if self.hparams.pretrained:
+            render_input = normalize(render[:, :3], [0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        else:
+            render_input = render[:, :3]
+        return self.network(self.im_backbone(render_input))
 
     def training_step(self, batch, batch_idx):
         dtype = torch.float16 if self.hparams.precision == 16 else torch.float32
         render_gt = batch['render'].to(dtype)
         bs = render_gt.size(0)
         if self.hparams.pretrained:
-            render_input = normalize(render_gt[:, :3], [0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+            render_input = normalize(render_gt[:, :3].clone(), [0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
         else:
             render_input = render_gt[:, :3]
         tf_pts    = batch['tf_pts']
@@ -234,7 +238,7 @@ class NeuralTransferFunction(LightningModule):
         render_gt = batch['render'].to(dtype)
         bs = render_gt.size(0)
         if self.hparams.pretrained:
-            render_input = normalize(render_gt[:, :3], [0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+            render_input = normalize(render_gt[:, :3].clone(), [0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
         else:
             render_input = render_gt[:, :3]
         tf_pts    = batch['tf_pts']
@@ -361,7 +365,7 @@ class NeuralTransferFunction(LightningModule):
             ffn = lambda p: int(p.name[p.name.rfind('_')+1:-3]) > split
         else:
             names = list(set(map(lambda n: n[:n.rfind('_')], os.listdir(Path(self.hparams.trainds)))))
-            split_idx = math.floor(0.8 * len(names))
+            split_idx = math.floor(0.81 * len(names))
             self.valid_names = names[split_idx:]
             ffn = lambda p: p.name[:p.name.rfind('_')] in self.valid_names
             print('valid names: ', self.valid_names)
