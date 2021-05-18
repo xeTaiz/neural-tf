@@ -156,7 +156,7 @@ class NeuralTransferFunction(LightningModule):
         elif self.hparams.backbone == 'resnext50':
             self.im_backbone = resnext50_32x4d(pretrained=hparams.pretrained)
         elif self.hparams.backbone == 'resnext101':
-            self.im_backbone = resnet101_32x8d(pretrained=hparams.pretrained)
+            self.im_backbone = resnext101_32x8d(pretrained=hparams.pretrained)
         else:
             raise Exception(f'Invalid parameter backbone: {hparams.backbone}. Use either resnet[18,34,50,101,152] or resnext[50,101]')
         im_feat = self.im_backbone.fc.in_features
