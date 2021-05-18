@@ -309,7 +309,7 @@ class NeuralTransferFunction(LightningModule):
         elif self.hparams.opt.lower() == 'adam':
             opt = torch.optim.Adam(params, weight_decay=self.hparams.weight_decay)
         else: raise Exception(f'Invalid optimizer given: {self.hparams.opt}')
-        if self.hparams.finetune:
+        if hasattr(self.hparams, 'finetune') and self.hparams.finetune:
             sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, self.hparams.max_epochs)
         else:
             sched = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, factor=0.5)
