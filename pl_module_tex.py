@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torchvision.models import resnet18, resnet34, resnet50
+from torchvision.models import resnet18, resnet34, resnet50, resnet101, resnet152, resnext50_32x4d, resnext101_32x8d
 from torchvision.utils  import make_grid
 from pytorch_lightning.core.lightning import LightningModule
 from pytorch_lightning.metrics.functional import accuracy, confusion_matrix
@@ -149,8 +149,16 @@ class NeuralTransferFunction(LightningModule):
             self.im_backbone = resnet34(pretrained=hparams.pretrained)
         elif self.hparams.backbone == 'resnet50':
             self.im_backbone = resnet50(pretrained=hparams.pretrained)
+        elif self.hparams.backbone == 'resnet101':
+            self.im_backbone = resnet101(pretrained=hparams.pretrained)
+        elif self.hparams.backbone == 'resnet152':
+            self.im_backbone = resnet152(pretrained=hparams.pretrained)
+        elif self.hparams.backbone == 'resnext50':
+            self.im_backbone = resnext50_32x4d(pretrained=hparams.pretrained)
+        elif self.hparams.backbone == 'resnext101':
+            self.im_backbone = resnet101_32x8d(pretrained=hparams.pretrained)
         else:
-            raise Exception(f'Invalid parameter backbone: {hparams.backbone}. Use either resnet18, resnet34, resnet50')
+            raise Exception(f'Invalid parameter backbone: {hparams.backbone}. Use either resnet[18,34,50,101,152] or resnext[50,101]')
         im_feat = self.im_backbone.fc.in_features
         self.im_backbone.fc = Noop()
     # Output Activation
@@ -301,8 +309,8 @@ class NeuralTransferFunction(LightningModule):
         elif self.hparams.opt.lower() == 'adam':
             opt = torch.optim.Adam(params, weight_decay=self.hparams.weight_decay)
         else: raise Exception(f'Invalid optimizer given: {self.hparams.opt}')
-        if hparams.finetune:
-            sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, hparams.max_epochs)
+        if self.hparams.finetune:
+            sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, self.hparams.max_epochs)
         else:
             sched = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, factor=0.5)
         return {
