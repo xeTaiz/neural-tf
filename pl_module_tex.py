@@ -208,11 +208,18 @@ class NeuralTransferFunction(LightningModule):
         im_feat = self.im_backbone(render_input)
         pred = self.network(im_feat)
         # Loss & Metrics
-        loss = self.loss(pred, tf_tex_targ, weight=1)
+        rgb_loss = self.loss(pred[:, :3], tf_tex_targ[:, :3])
+        op_loss  = self.loss(pred[:,  3], tf_tex_targ[:,  3])
+        w = self.hparams.opacity_weight
+        loss = (1-w) * rgb_loss + w * op_loss
+        rgb_mae = F.l1_loss(pred[:, :3].detach(), tf_tex_targ[:, :3])
+        op_mae  = F.l1_loss(pred[:,  3].detach(), tf_tex_targ[:,  3])
         mae = F.l1_loss(pred.detach(), tf_tex_targ)
 
-        self.log('metrics/train_loss', loss.detach().cpu(), prog_bar=True)
-        self.log('metrics/train_mae', mae.detach().cpu(), prog_bar=True)
+        self.log('metrics/train_loss',       loss.detach().cpu(), prog_bar=True)
+        self.log('metrics/train_mae',         mae.detach().cpu(), prog_bar=True)
+        self.log('metrics/train_rgb_mae', rgb_mae.detach().cpu())
+        self.log('metrics/train_op_mae',   op_mae.detach().cpu())
 
         if batch_idx < self.hparams.num_images_logged:
 
@@ -256,7 +263,12 @@ class NeuralTransferFunction(LightningModule):
         im_feat = self.im_backbone(render_input)
         pred = self.network(im_feat)
         # Loss & Metrics
-        loss = self.loss(pred, tf_tex_targ, weight=1)
+        rgb_loss = self.loss(pred[:, :3], tf_tex_targ[:, :3])
+        op_loss  = self.loss(pred[:,  3], tf_tex_targ[:,  3])
+        w = self.hparams.opacity_weight
+        loss = (1-w) * rgb_loss + w * op_loss
+        rgb_mae = F.l1_loss(pred[:, :3].detach(), tf_tex_targ[:, :3])
+        op_mae  = F.l1_loss(pred[:,  3].detach(), tf_tex_targ[:,  3])
         mae = F.l1_loss(pred.detach(), tf_tex_targ)
 
         if batch_idx < self.hparams.num_images_logged:
@@ -271,6 +283,8 @@ class NeuralTransferFunction(LightningModule):
         return {
             'loss': loss,
             'mae': mae,
+            'rgb_mae': rgb_mae,
+            'op_mae': op_mae,
             **image_logs
         }
 
@@ -289,7 +303,10 @@ class NeuralTransferFunction(LightningModule):
 
         self.log('val_loss', val_loss)
         self.log('metrics/val_loss', val_loss)
-        self.log('metrics/val_mae', torch.stack([o['mae'] for o in outputs]).mean())
+        self.log('metrics/val_mae',     torch.stack([o['mae']     for o in outputs]).mean())
+        self.log('metrics/val_rgb_mae', torch.stack([o['rgb_mae'] for o in outputs]).mean())
+        self.log('metrics/val_op_mae',  torch.stack([o['op_mae']  for o in outputs]).mean())
+
 
         for name, m in self.network.named_modules():
             if hasattr(m, 'weight'):
@@ -408,7 +425,7 @@ class NeuralTransferFunction(LightningModule):
         parser.add_argument('--batch_size',    default=32,     type=int,   help='Batch Size')
         parser.add_argument('--opt', type=str, default='Ranger', help='Optimizer to use. One of Ranger, Adam')
         parser.add_argument('--loss', type=str, default='mse', help='Loss Function to use')
-        parser.add_argument('--opacity-weight', type=float, default=1.0, help='Weights the loss higher for opacity (>1e-2)')
+        parser.add_argument('--opacity-weight', type=float, default=0.5, help='Weights the loss higher for opacity compared to RGB. 0 leads to RGB loss only, 1 leads to opacity loss only.')
         parser.add_argument('--last-act', type=str, default='none', help='Last activation function. Otions: nrelu, relu, sigmoid, none')
         parser.add_argument('--preload', action='store_true', help='If set, preloads training data into RAM.')
         parser.add_argument('--preload-valid', action='store_true', help='If set, preloads the validation dataset into RAM')
@@ -416,4 +433,5 @@ class NeuralTransferFunction(LightningModule):
         parser.add_argument('--num_images_logged', type=int, default=10, help='Number of slices / TFs logged during validation epoch')
         parser.add_argument('--max-train-samples', type=int, default=None, help='Restrict training dataset to given amount of samples')
         parser.add_argument('--tf-res', type=int, default=128, help='Output TF Texture Resolution')
+        parser.add_argument('--opacity-loss_weight')
         return parser
