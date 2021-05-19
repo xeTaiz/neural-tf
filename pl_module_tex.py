@@ -83,6 +83,20 @@ def fig_to_img(fig):
     plt.close(fig)
     return im
 
+def compute_tex_gradient(tex):
+    ''' Computes the Gradient absolute for a 1D texture or shape ([N,] C, W).
+        If C > 1, the gradient is computed for each channel individually
+
+    Args:
+        tex (Tensor): Texture to compute gradients on
+
+    Returns:
+        Tensor: Gradient of the Texture
+    '''
+    C = tex.shape[-2]
+    sobel = torch.tensor([-1, 0, 1], dtype=tex.dtype, device=tex.device).expand(C, 1, -1)# 1x1x3 kernel
+    return F.conv1d(tex, sobel, padding=1, groups=C).abs()
+
 def grab_bin_idxs(x, bins, value_range=None, as_tuples=False):
     ''' Bins the input to `value_range` using `bins` bins, then returns the indices of `x` which lie in one bin, for all bins
 
@@ -210,6 +224,14 @@ class NeuralTransferFunction(LightningModule):
         # Loss & Metrics
         rgb_loss = self.loss(pred[:, :3], tf_tex_targ[:, :3])
         op_loss  = self.loss(pred[:,  3], tf_tex_targ[:,  3])
+        if self.hparams.loss_on_gradient:
+            v = self.hparams.loss_on_gradient
+            grad_pred = compute_tex_gradient(       pred[:, [3]])
+            grad_targ = compute_tex_gradient(tf_tex_targ[:, [3]])
+            grad_loss = self.loss(grad_pred, grad_targ)
+            op_loss = (1-v) * op_loss + v * grad_loss
+            self.log('metrics/train_op_grad_mae', F.l1_loss(grad_pred.detach(), grad_targ.detach()).cpu())
+
         w = self.hparams.opacity_weight
         loss = (1-w) * rgb_loss + w * op_loss
         rgb_mae = F.l1_loss(pred[:, :3].detach(), tf_tex_targ[:, :3])
@@ -249,6 +271,7 @@ class NeuralTransferFunction(LightningModule):
         })
 
     def validation_step(self, batch, batch_idx):
+        more = {}
         dtype = torch.float16 if self.hparams.precision == 16 else torch.float32
         render_gt = batch['render'].to(dtype)
         bs = render_gt.size(0)
@@ -265,6 +288,14 @@ class NeuralTransferFunction(LightningModule):
         # Loss & Metrics
         rgb_loss = self.loss(pred[:, :3], tf_tex_targ[:, :3])
         op_loss  = self.loss(pred[:,  3], tf_tex_targ[:,  3])
+        if self.hparams.loss_on_gradient:
+            v = self.hparams.loss_on_gradient
+            grad_pred = compute_tex_gradient(       pred[:, [3]])
+            grad_targ = compute_tex_gradient(tf_tex_targ[:, [3]])
+            grad_loss = self.loss(grad_pred, grad_targ)
+            op_loss = (1-v) * op_loss + v * grad_loss
+            more['op_grad_mae'] = F.l1_loss(grad_pred.detach(), grad_targ.detach()).cpu()
+
         w = self.hparams.opacity_weight
         loss = (1-w) * rgb_loss + w * op_loss
         rgb_mae = F.l1_loss(pred[:, :3].detach(), tf_tex_targ[:, :3])
@@ -285,7 +316,8 @@ class NeuralTransferFunction(LightningModule):
             'mae': mae,
             'rgb_mae': rgb_mae,
             'op_mae': op_mae,
-            **image_logs
+            **image_logs,
+            **more
         }
 
     def validation_epoch_end(self, outputs):
@@ -306,6 +338,8 @@ class NeuralTransferFunction(LightningModule):
         self.log('metrics/val_mae',     torch.stack([o['mae']     for o in outputs]).mean())
         self.log('metrics/val_rgb_mae', torch.stack([o['rgb_mae'] for o in outputs]).mean())
         self.log('metrics/val_op_mae',  torch.stack([o['op_mae']  for o in outputs]).mean())
+        if self.hparams.loss_on_gradient:
+            self.log('metrics/val_op_grad_mae', torch.stack([o['op_grad_mae'] for o in outputs]).mean())
 
 
         for name, m in self.network.named_modules():
@@ -433,5 +467,5 @@ class NeuralTransferFunction(LightningModule):
         parser.add_argument('--num_images_logged', type=int, default=10, help='Number of slices / TFs logged during validation epoch')
         parser.add_argument('--max-train-samples', type=int, default=None, help='Restrict training dataset to given amount of samples')
         parser.add_argument('--tf-res', type=int, default=128, help='Output TF Texture Resolution')
-        parser.add_argument('--opacity-loss_weight')
+        parser.add_argument('--loss-on-gradient', type=float, default=None, help='Adds a loss on the gradient of the opacity textures. This is merged with the opacity loss through lerp. 0.0 all weight on opacity, 1.0 all weight on its gradient')
         return parser
