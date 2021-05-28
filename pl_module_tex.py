@@ -222,16 +222,17 @@ class NeuralTransferFunction(LightningModule):
         im_feat = self.im_backbone(render_input)
         pred = self.network(im_feat)
         # Loss & Metrics
-        rgb_loss = self.loss(pred[:, :3], tf_tex_targ[:, :3])
-        op_loss  = self.loss(pred[:,  3], tf_tex_targ[:,  3])
-        if self.hparams.loss_on_gradient:
-            v = self.hparams.loss_on_gradient
-            grad_pred = compute_tex_gradient(       pred[:, [3]])
+        if self.hparams.gradient_loss_weighting:
+            v = self.hparams.gradient_loss_weighting
             grad_targ = compute_tex_gradient(tf_tex_targ[:, [3]])
-            grad_loss = self.loss(grad_pred, grad_targ)
-            op_loss = (1-v) * op_loss + v * grad_loss
-            self.log('metrics/train_op_grad_mae', F.l1_loss(grad_pred.detach(), grad_targ.detach()).cpu())
+            grad_targ /= grad_targ.max()
+            op_weight = torch.ones_like(pred[:, [3]])
+            op_weight += self.hparams.gradient_loss_weighting * grad_targ
+        else:
+            op_weight = 1
 
+        rgb_loss = self.loss(pred[:, :3],  tf_tex_targ[:, :3])
+        op_loss  = self.loss(pred[:, [3]], tf_tex_targ[:, [3]], weight=op_weight)
         w = self.hparams.opacity_weight
         loss = (1-w) * rgb_loss + w * op_loss
         rgb_mae = F.l1_loss(pred[:, :3].detach(), tf_tex_targ[:, :3])
@@ -286,15 +287,17 @@ class NeuralTransferFunction(LightningModule):
         im_feat = self.im_backbone(render_input)
         pred = self.network(im_feat)
         # Loss & Metrics
-        rgb_loss = self.loss(pred[:, :3], tf_tex_targ[:, :3])
-        op_loss  = self.loss(pred[:,  3], tf_tex_targ[:,  3])
-        if self.hparams.loss_on_gradient:
-            v = self.hparams.loss_on_gradient
-            grad_pred = compute_tex_gradient(       pred[:, [3]])
+        if self.hparams.gradient_loss_weighting:
+            v = self.hparams.gradient_loss_weighting
             grad_targ = compute_tex_gradient(tf_tex_targ[:, [3]])
-            grad_loss = self.loss(grad_pred, grad_targ)
-            op_loss = (1-v) * op_loss + v * grad_loss
-            more['op_grad_mae'] = F.l1_loss(grad_pred.detach(), grad_targ.detach()).cpu()
+            grad_targ /= grad_targ.max()
+            op_weight = torch.ones_like(pred[:, [3]])
+            op_weight += self.hparams.gradient_loss_weighting * grad_targ
+        else:
+            op_weight = 1
+
+        rgb_loss = self.loss(pred[:, :3],  tf_tex_targ[:, :3])
+        op_loss  = self.loss(pred[:, [3]], tf_tex_targ[:, [3]], weight=op_weight)
 
         w = self.hparams.opacity_weight
         loss = (1-w) * rgb_loss + w * op_loss
@@ -338,14 +341,11 @@ class NeuralTransferFunction(LightningModule):
         self.log('metrics/val_mae',     torch.stack([o['mae']     for o in outputs]).mean())
         self.log('metrics/val_rgb_mae', torch.stack([o['rgb_mae'] for o in outputs]).mean())
         self.log('metrics/val_op_mae',  torch.stack([o['op_mae']  for o in outputs]).mean())
-        if self.hparams.loss_on_gradient:
-            self.log('metrics/val_op_grad_mae', torch.stack([o['op_grad_mae'] for o in outputs]).mean())
-
 
         for name, m in self.network.named_modules():
             if hasattr(m, 'weight'):
                 self.log(f'weight_norms/{name}  Weight Norm', torch.norm(m.weight))
-                self.log(f'weight_norms/{name}  Bias Norm', torch.norm(m.bias))
+                self.log(f'weight_norms/{name}  Bias Norm',   torch.norm(m.bias))
 
     def configure_optimizers(self):
         params = [
@@ -467,5 +467,5 @@ class NeuralTransferFunction(LightningModule):
         parser.add_argument('--num_images_logged', type=int, default=10, help='Number of slices / TFs logged during validation epoch')
         parser.add_argument('--max-train-samples', type=int, default=None, help='Restrict training dataset to given amount of samples')
         parser.add_argument('--tf-res', type=int, default=128, help='Output TF Texture Resolution')
-        parser.add_argument('--loss-on-gradient', type=float, default=None, help='Adds a loss on the gradient of the opacity textures. This is merged with the opacity loss through lerp. 0.0 all weight on opacity, 1.0 all weight on its gradient')
+        parser.add_argument('--gradient-loss-weighting', type=float, default=None, help='Weights the opacity loss with the gradient of the opacity textures. This is used in the opacity loss. 0.0 no extra weighting, weight is 1 + this parameter * normalized gradient length')
         return parser
