@@ -22,6 +22,7 @@ from neuraltf_modules import NeuralTF_Texture
 from unet3d import AdaptiveInstanceNorm3d
 from adaptive_wing_loss import AdaptiveWingLoss, NormalizedReLU, NegativeScaledReLU
 from ssim3d_torch import ssim3d
+from emd import SinkhornOT
 
 from torchvtk.datasets  import TorchDataset, TorchQueueDataset, dict_collate_fn
 from torchvtk.utils     import make_4d, make_5d, make_nd, apply_tf_torch, tex_from_pts, TransferFunctionApplication, random_tf_from_vol, create_peaky_tf
@@ -40,6 +41,46 @@ def normalize(tensors, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225], in
         tensors = tensors.clone()
 
     return tensors.sub_(mean).div_(std)
+
+class EMDLoss(nn.Module):
+    def __init__(self, eps=1e-3, N=100):
+        super().__init__()
+        self.eps = eps
+        self.N = N
+
+    def forward(self, pred, targ, weight=1):
+        ''' Computes Earth Movers Distance through Sinkhorn optimal transport, i.e. sinkhorn distance
+
+        Args:
+            pred (Tensor): Prediction of shape (BS, C, W)
+            targ (Tensor): Target of shape (BS, C, W)
+            weight (any):  Is ignored, just here to fit API of Weighted[*]Loss
+
+        Returns:
+            Tensor: Summed sinkhorn distance
+        '''
+        bs, c, w = pred.shape
+        cost = torch.linspace(0, w, w, dtype=torch.float32, device=pred.device)
+        cost = (cost[None, :] - cost[:, None])**2
+        cost /= cost.max()
+        targ /= targ.max()
+        with torch.cuda.amp.autocast(enabled=False):
+            return SinkhornOT.apply(pred.reshape(-1, w).float(), targ.reshape(-1, w).float(), cost, self.eps, self.N).sum()
+
+class NormalizeMax(nn.Module):
+    def __init__(self, inplace=True): super().__init__()
+    def forward(self, x): return x / x.max(dim=-1, keepdim=True).values
+
+class IoULoss(nn.Module):
+    def __init__(self): super().__init__()
+    def forward(self, pred, targ, thresh=1e-2):
+        eps = torch.finfo(pred.dtype).eps
+        t = targ > thresh
+        t_pred, t_targ = pred[t], targ[t]
+        mask = t_pred < t_targ
+        iou1 = (t_pred[mask]  + eps) /  (t_targ[mask] + eps)
+        iou2 = (t_targ[~mask] + eps) / (t_pred[~mask] + eps)
+        return 1.0 - torch.mean(torch.cat([iou1, iou2], dim=-1))
 
 class WeightedMSELoss(nn.Module):
     def __init__(self): super().__init__()
@@ -184,6 +225,10 @@ class NeuralTransferFunction(LightningModule):
             act = NegativeScaledReLU
         elif hparams.last_act == 'sigmoid':
             act = lambda x : nn.Sigmoid()
+        elif hparams.last_act == 'softmax':
+            act = lambda x: nn.Softmax()
+        elif hparams.last_act == 'normalize':
+            act = NormalizeMax
         elif hparams.last_act == 'none':
             act = Noop
         else:
@@ -197,6 +242,8 @@ class NeuralTransferFunction(LightningModule):
             self.loss = WeightedMSELoss()
         elif hparams.loss == 'mae':
             self.loss = WeightedMAELoss()
+        elif hparams.loss == 'emd':
+            self.loss = EMDLoss()
         else:
             raise Exception(f'Invalid loss given ({hparams.loss}). Valid choices are mse, mae and awl')
 
