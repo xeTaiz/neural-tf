@@ -67,9 +67,19 @@ class EMDLoss(nn.Module):
         with torch.cuda.amp.autocast(enabled=False):
             return SinkhornOT.apply(pred.reshape(-1, w).float(), targ.reshape(-1, w).float(), cost, self.eps, self.N).sum()
 
-class NormalizeMax(nn.Module):
+class TransferFunctionLoss(nn.Module):
+    def __init__(self, inplace=True):
+        super().__init__()
+        self.emd = EMDLoss()
+        self.mse = F.mse_loss
+
+    def forward(self, pred, targ):
+        return self.mse(pred[:, :3].sigmoid(),  targ[:, :3]), \
+               self.emd(pred[:, [3]].softmax(), targ[:, [3]] / targ[:, [3]].sum())
+
+class NormalizeSum(nn.Module):
     def __init__(self, inplace=True): super().__init__()
-    def forward(self, x): return x / x.max(dim=-1, keepdim=True).values
+    def forward(self, x): return x / x.sum(dim=-1, keepdim=True)
 
 class IoULoss(nn.Module):
     def __init__(self): super().__init__()
@@ -198,54 +208,48 @@ class NeuralTransferFunction(LightningModule):
         super().__init__()
         self.hparams = hparams
     # Image Backbone
-        if self.hparams.backbone == 'resnet18':
-            self.im_backbone = resnet18(pretrained=hparams.pretrained)
-        elif self.hparams.backbone == 'resnet34':
-            self.im_backbone = resnet34(pretrained=hparams.pretrained)
-        elif self.hparams.backbone == 'resnet50':
-            self.im_backbone = resnet50(pretrained=hparams.pretrained)
-        elif self.hparams.backbone == 'resnet101':
-            self.im_backbone = resnet101(pretrained=hparams.pretrained)
-        elif self.hparams.backbone == 'resnet152':
-            self.im_backbone = resnet152(pretrained=hparams.pretrained)
-        elif self.hparams.backbone == 'resnext50':
-            self.im_backbone = resnext50_32x4d(pretrained=hparams.pretrained)
-        elif self.hparams.backbone == 'resnext101':
-            self.im_backbone = resnext101_32x8d(pretrained=hparams.pretrained)
-        else:
-            raise Exception(f'Invalid parameter backbone: {hparams.backbone}. Use either resnet[18,34,50,101,152] or resnext[50,101]')
+        if   self.hparams.backbone == 'resnet18':   self.im_backbone = resnet18(pretrained=hparams.pretrained)
+        elif self.hparams.backbone == 'resnet34':   self.im_backbone = resnet34(pretrained=hparams.pretrained)
+        elif self.hparams.backbone == 'resnet50':   self.im_backbone = resnet50(pretrained=hparams.pretrained)
+        elif self.hparams.backbone == 'resnet101':  self.im_backbone = resnet101(pretrained=hparams.pretrained)
+        elif self.hparams.backbone == 'resnet152':  self.im_backbone = resnet152(pretrained=hparams.pretrained)
+        elif self.hparams.backbone == 'resnext50':  self.im_backbone = resnext50_32x4d(pretrained=hparams.pretrained)
+        elif self.hparams.backbone == 'resnext101': self.im_backbone = resnext101_32x8d(pretrained=hparams.pretrained)
+        else: raise Exception(f'Invalid parameter backbone: {hparams.backbone}. Use either resnet[18,34,50,101,152] or resnext[50,101]')
         im_feat = self.im_backbone.fc.in_features
         self.im_backbone.fc = Noop()
     # Output Activation
-        if hparams.last_act == 'nrelu':
-            act = NormalizedReLU
-        elif hparams.last_act == 'relu':
-            act = nn.ReLU
-        elif hparams.last_act == 'nsrelu':
-            act = NegativeScaledReLU
-        elif hparams.last_act == 'sigmoid':
-            act = lambda x : nn.Sigmoid()
-        elif hparams.last_act == 'softmax':
-            act = lambda x: nn.Softmax()
-        elif hparams.last_act == 'normalize':
-            act = NormalizeMax
-        elif hparams.last_act == 'none':
-            act = Noop
-        else:
-            raise Exception(f'Invalid last activation given ({hparams.last_act}).')
+        if   hparams.last_act_rgb == 'nrelu':     self.rgb_act = NormalizedReLU()
+        elif hparams.last_act_rgb == 'relu':      self.rgb_act = F.relu
+        elif hparams.last_act_rgb == 'nsrelu':    self.rgb_act = NegativeScaledReLU()
+        elif hparams.last_act_rgb == 'sigmoid':   self.rgb_act = F.sigmoid
+        elif hparams.last_act_rgb == 'softmax':   self.rgb_act = partial(F.softmax, dim=-1)
+        elif hparams.last_act_rgb == 'normalize': self.rgb_act = NormalizeSum()
+        elif hparams.last_act_rgb == 'none':      self.rgb_act = Noop()
+        else: raise Exception(f'Invalid last activation (color) given ({hparams.last_act_rgb}).')
+
+        if   hparams.last_act_op == 'nrelu':     self.op_act = NormalizedReLU()
+        elif hparams.last_act_op == 'relu':      self.op_act = F.relu
+        elif hparams.last_act_op == 'nsrelu':    self.op_act = NegativeScaledReLU()
+        elif hparams.last_act_op == 'sigmoid':   self.op_act = F.sigmoid
+        elif hparams.last_act_op == 'softmax':   self.op_act = partial(F.softmax, dim=-1)
+        elif hparams.last_act_op == 'normalize': self.op_act = NormalizeSum()
+        elif hparams.last_act_op == 'none':      self.op_act = Noop()
+        else: raise Exception(f'Invalid last activation (opacity) given ({hparams.last_act_op}).')
     # Initialize Network
-        self.network = NeuralTF_Texture(im_feat, last_act=act, out_res=hparams.tf_res)
+        self.network = NeuralTF_Texture(im_feat, last_act=Noop, out_res=hparams.tf_res)
     # Loss Function
-        if hparams.loss == 'awl':
-            self.loss = AdaptiveWingLoss()
-        elif hparams.loss == 'mse':
-            self.loss = WeightedMSELoss()
-        elif hparams.loss == 'mae':
-            self.loss = WeightedMAELoss()
-        elif hparams.loss == 'emd':
-            self.loss = EMDLoss()
-        else:
-            raise Exception(f'Invalid loss given ({hparams.loss}). Valid choices are mse, mae and awl')
+        if   hparams.rgb_loss == 'awl': self.rgb_loss = AdaptiveWingLoss()
+        elif hparams.rgb_loss == 'mse': self.rgb_loss = WeightedMSELoss()
+        elif hparams.rgb_loss == 'mae': self.rgb_loss = WeightedMAELoss()
+        elif hparams.rgb_loss == 'emd': self.rgb_loss = EMDLoss()
+        else: raise Exception(f'Invalid rgb loss given ({hparams.rgb_loss}). Valid choices are mse, mae and awl')
+
+        if   hparams.op_loss == 'awl': self.op_loss = AdaptiveWingLoss()
+        elif hparams.op_loss == 'mse': self.op_loss = WeightedMSELoss()
+        elif hparams.op_loss == 'mae': self.op_loss = WeightedMAELoss()
+        elif hparams.op_loss == 'emd': self.op_loss = EMDLoss()
+        else: raise Exception(f'Invalid opacity loss given ({hparams.op_loss}). Valid choices are mse, mae and awl')
 
     def forward(self, render):
         if self.hparams.pretrained:
@@ -265,39 +269,34 @@ class NeuralTransferFunction(LightningModule):
         tf_pts    = batch['tf_pts']
         if torch.is_tensor(tf_pts): tf_pts = [t for t in tf_pts]
         tf_tex_targ = tex_from_pts(tf_pts, resolution=self.hparams.tf_res)
+        rgb_targ = tf_tex_targ[:, :3]
+        op_targ  = tf_tex_targ[:, [3]] / tf_tex_targ[:, [3]].sum(dim=-1, keepdim=True)
         # Predict
         im_feat = self.im_backbone(render_input)
         pred = self.network(im_feat)
+        rgb_pred = self.rgb_act(pred[:, :3])
+        op_pred  = self.op_act( pred[:, [3]])
         # Loss & Metrics
-        if self.hparams.gradient_loss_weighting:
-            v = self.hparams.gradient_loss_weighting
-            grad_targ = compute_tex_gradient(tf_tex_targ[:, [3]])
-            grad_targ /= grad_targ.max()
-            op_weight = torch.ones_like(pred[:, [3]])
-            op_weight += self.hparams.gradient_loss_weighting * grad_targ
-        else:
-            op_weight = 1
-
-        rgb_loss = self.loss(pred[:, :3],  tf_tex_targ[:, :3])
-        op_loss  = self.loss(pred[:, [3]], tf_tex_targ[:, [3]], weight=op_weight)
+        rgb_loss = self.rgb_loss(rgb_pred, rgb_targ)
+        op_loss  = self.op_loss(  op_pred, op_targ)
         w = self.hparams.opacity_weight
         loss = (1-w) * rgb_loss + w * op_loss
-        rgb_mae = F.l1_loss(pred[:, :3].detach(), tf_tex_targ[:, :3])
-        op_mae  = F.l1_loss(pred[:,  3].detach(), tf_tex_targ[:,  3])
-        mae = F.l1_loss(pred.detach(), tf_tex_targ)
+        rgb_mae = F.l1_loss(rgb_pred.detach(), rgb_targ)
+        op_mae  = F.l1_loss(op_pred.detach(),  op_targ)
 
-        self.log('metrics/train_loss',       loss.detach().cpu(), prog_bar=True)
-        self.log('metrics/train_mae',         mae.detach().cpu(), prog_bar=True)
-        self.log('metrics/train_rgb_mae', rgb_mae.detach().cpu())
-        self.log('metrics/train_op_mae',   op_mae.detach().cpu())
+        self.log('metrics/train_loss',        loss.detach().cpu(), prog_bar=True)
+        self.log('metrics/train_rgb_loss',rgb_loss.detach().cpu())
+        self.log('metrics/train_op_loss',  op_loss.detach().cpu())
+        self.log('metrics/train_rgb_mae',  rgb_mae.detach().cpu())
+        self.log('metrics/train_op_mae',    op_mae.detach().cpu())
 
         if batch_idx < self.hparams.num_images_logged:
-
-            image_logs = {
-                'render': render_gt[[0]].detach().cpu().float(),
-                'tf_pred': torch.clamp(pred[[0]].detach().cpu().float(), 0, 1),
-                'tf_targ': tf_tex_targ[[0]].detach().cpu().float()
-            }
+            with torch.no_grad():
+                image_logs = {
+                    'render': render_gt[[0]].detach().cpu().float(),
+                    'tf_pred': torch.cat([rgb_pred[[0]], op_pred[[0]] / op_pred[[0]].max()], dim=1).detach().cpu().float(),
+                    'tf_targ': torch.cat([rgb_targ[[0]], op_targ[[0]] / op_targ[[0]].max()], dim=1).detach().cpu().float()
+                }
         else:
             image_logs = {}
 
@@ -330,40 +329,39 @@ class NeuralTransferFunction(LightningModule):
         tf_pts    = batch['tf_pts']
         if torch.is_tensor(tf_pts): tf_pts = [t for t in tf_pts]
         tf_tex_targ = tex_from_pts(tf_pts, resolution=self.hparams.tf_res)
+        rgb_targ = tf_tex_targ[:, :3]
+        op_targ  = tf_tex_targ[:, [3]] / tf_tex_targ[:, [3]].sum(dim=-1, keepdim=True)
         # Predict
         im_feat = self.im_backbone(render_input)
         pred = self.network(im_feat)
+        rgb_pred = self.rgb_act(pred[:, :3])
+        op_pred  = self.op_act( pred[:, [3]])
         # Loss & Metrics
-        if self.hparams.gradient_loss_weighting:
-            v = self.hparams.gradient_loss_weighting
-            grad_targ = compute_tex_gradient(tf_tex_targ[:, [3]])
-            grad_targ /= grad_targ.max()
-            op_weight = torch.ones_like(pred[:, [3]])
-            op_weight += self.hparams.gradient_loss_weighting * grad_targ
-        else:
-            op_weight = 1
-
-        rgb_loss = self.loss(pred[:, :3],  tf_tex_targ[:, :3])
-        op_loss  = self.loss(pred[:, [3]], tf_tex_targ[:, [3]], weight=op_weight)
-
+        rgb_loss = self.rgb_loss(rgb_pred, rgb_targ)
+        op_loss  = self.op_loss(  op_pred, op_targ)
         w = self.hparams.opacity_weight
         loss = (1-w) * rgb_loss + w * op_loss
-        rgb_mae = F.l1_loss(pred[:, :3].detach(), tf_tex_targ[:, :3])
-        op_mae  = F.l1_loss(pred[:,  3].detach(), tf_tex_targ[:,  3])
-        mae = F.l1_loss(pred.detach(), tf_tex_targ)
+        rgb_mae = F.l1_loss(rgb_pred.detach(), rgb_targ)
+        op_mae  = F.l1_loss(op_pred.detach(),  op_targ)
+
+        self.log('metrics/valid_loss',        loss.detach().cpu(), prog_bar=True)
+        self.log('metrics/valid_rgb_loss',rgb_loss.detach().cpu())
+        self.log('metrics/valid_op_loss',  op_loss.detach().cpu())
+        self.log('metrics/valid_rgb_mae',  rgb_mae.detach().cpu())
+        self.log('metrics/valid_op_mae',    op_mae.detach().cpu())
 
         if batch_idx < self.hparams.num_images_logged:
-            image_logs = {
-                'render': render_gt[[0]].detach().cpu().float(),
-                'tf_pred': torch.clamp(pred[[0]].detach().cpu().float(), 0, 1),
-                'tf_targ': tf_tex_targ[[0]].detach().cpu().float()
-            }
+            with torch.no_grad():
+                image_logs = {
+                    'render': render_gt[[0]].detach().cpu().float(),
+                    'tf_pred': torch.cat([rgb_pred[[0]], op_pred[[0]] / op_pred[[0]].max()], dim=1).detach().cpu().float(),
+                    'tf_targ': torch.cat([rgb_targ[[0]], op_targ[[0]] / op_targ[[0]].max()], dim=1).detach().cpu().float()
+                }
         else:
             image_logs = {}
 
         return {
             'loss': loss,
-            'mae': mae,
             'rgb_mae': rgb_mae,
             'op_mae': op_mae,
             **image_logs,
@@ -385,7 +383,6 @@ class NeuralTransferFunction(LightningModule):
 
         self.log('val_loss', val_loss)
         self.log('metrics/val_loss', val_loss)
-        self.log('metrics/val_mae',     torch.stack([o['mae']     for o in outputs]).mean())
         self.log('metrics/val_rgb_mae', torch.stack([o['rgb_mae'] for o in outputs]).mean())
         self.log('metrics/val_op_mae',  torch.stack([o['op_mae']  for o in outputs]).mean())
 
@@ -505,14 +502,15 @@ class NeuralTransferFunction(LightningModule):
         parser.add_argument('--weight_decay',  default=1e-5, type=float, help='Weight decay for training.')
         parser.add_argument('--batch_size',    default=32,     type=int,   help='Batch Size')
         parser.add_argument('--opt', type=str, default='Ranger', help='Optimizer to use. One of Ranger, Adam')
-        parser.add_argument('--loss', type=str, default='mse', help='Loss Function to use')
+        parser.add_argument('--rgb-loss', type=str, default='mse', help='Loss Function to use for color')
+        parser.add_argument('--op-loss', type=str, default='mse', help='Loss Function to use for opacity')
         parser.add_argument('--opacity-weight', type=float, default=0.5, help='Weights the loss higher for opacity compared to RGB. 0 leads to RGB loss only, 1 leads to opacity loss only.')
-        parser.add_argument('--last-act', type=str, default='none', help='Last activation function. Otions: nrelu, relu, sigmoid, none')
+        parser.add_argument('--last-act-rgb', type=str, default='none', help='Last activation function. Otions: nrelu, relu, sigmoid, none, softmax, normalize')
+        parser.add_argument('--last-act-op', type=str, default='none', help='Last activation function. Otions: nrelu, relu, sigmoid, none, softmax, normalize')
         parser.add_argument('--preload', action='store_true', help='If set, preloads training data into RAM.')
         parser.add_argument('--preload-valid', action='store_true', help='If set, preloads the validation dataset into RAM')
         parser.add_argument('--one_vol', action='store_true', help='Modify dataset splitting to work on single volume datasets')
         parser.add_argument('--num_images_logged', type=int, default=10, help='Number of slices / TFs logged during validation epoch')
         parser.add_argument('--max-train-samples', type=int, default=None, help='Restrict training dataset to given amount of samples')
         parser.add_argument('--tf-res', type=int, default=128, help='Output TF Texture Resolution')
-        parser.add_argument('--gradient-loss-weighting', type=float, default=None, help='Weights the opacity loss with the gradient of the opacity textures. This is used in the opacity loss. 0.0 no extra weighting, weight is 1 + this parameter * normalized gradient length')
         return parser
