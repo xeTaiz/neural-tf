@@ -5,6 +5,7 @@ from pathlib   import Path
 import time, math, os
 import numpy as np
 import wandb
+import matplotlib
 import matplotlib.pyplot as plt
 
 import torch
@@ -22,7 +23,7 @@ from neuraltf_modules import NeuralTF_Texture
 from unet3d import AdaptiveInstanceNorm3d
 from adaptive_wing_loss import AdaptiveWingLoss, NormalizedReLU, NegativeScaledReLU
 from ssim3d_torch import ssim3d
-from emd import SinkhornOT
+from emd import SinkhornOT, get_coupling
 
 from torchvtk.datasets  import TorchDataset, TorchQueueDataset, dict_collate_fn
 from torchvtk.utils     import make_4d, make_5d, make_nd, apply_tf_torch, tex_from_pts, TransferFunctionApplication, random_tf_from_vol, create_peaky_tf
@@ -48,6 +49,11 @@ class EMDLoss(nn.Module):
         self.eps = eps
         self.N = N
 
+    def get_cost(self, w, dtype=torch.float32, device='cpu'):
+        cost = torch.linspace(0, w, w, dtype=dtype, device=device)
+        cost = (cost[None, :] - cost[:, None])**2
+        return cost / cost.max()
+
     def forward(self, pred, targ, weight=1):
         ''' Computes Earth Movers Distance through Sinkhorn optimal transport, i.e. sinkhorn distance
 
@@ -60,22 +66,10 @@ class EMDLoss(nn.Module):
             Tensor: Summed sinkhorn distance
         '''
         bs, c, w = pred.shape
-        cost = torch.linspace(0, w, w, dtype=torch.float32, device=pred.device)
-        cost = (cost[None, :] - cost[:, None])**2
-        cost /= cost.max()
+        cost = self.get_cost(w, dtype=torch.float32, device=pred.device)
         targ /= targ.max()
         with torch.cuda.amp.autocast(enabled=False):
             return SinkhornOT.apply(pred.reshape(-1, w).float(), targ.reshape(-1, w).float(), cost, self.eps, self.N).sum()
-
-class TransferFunctionLoss(nn.Module):
-    def __init__(self, inplace=True):
-        super().__init__()
-        self.emd = EMDLoss()
-        self.mse = F.mse_loss
-
-    def forward(self, pred, targ):
-        return self.mse(pred[:, :3].sigmoid(),  targ[:, :3]), \
-               self.emd(pred[:, [3]].softmax(), targ[:, [3]] / targ[:, [3]].sum())
 
 class NormalizeSum(nn.Module):
     def __init__(self, inplace=True): super().__init__()
@@ -133,6 +127,13 @@ def fig_to_img(fig):
     im = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8).reshape((h, w, 3))
     plt.close(fig)
     return im
+
+def plot_coupling(pred, targ, coupl):
+    fig, axs = plt.subplots(2, 2, figsize=(10,10))
+    axs[0, 0].plot(targ.cpu().float())
+    axs[1, 0].imshow(coupl.cpu().float())
+    axs[1, 1].plot(pred.cpu().float(), transform=matplotlib.transforms.Affine2D().rotate_deg(270) + axs[1,1].transData)
+    return fig
 
 def compute_tex_gradient(tex):
     ''' Computes the Gradient absolute for a 1D texture or shape ([N,] C, W).
@@ -207,7 +208,7 @@ class NeuralTransferFunction(LightningModule):
     def __init__(self, hparams):
         super().__init__()
         self.hparams = hparams
-    # Image Backbone
+        # Image Backbone
         if   self.hparams.backbone == 'resnet18':   self.im_backbone = resnet18(pretrained=hparams.pretrained)
         elif self.hparams.backbone == 'resnet34':   self.im_backbone = resnet34(pretrained=hparams.pretrained)
         elif self.hparams.backbone == 'resnet50':   self.im_backbone = resnet50(pretrained=hparams.pretrained)
@@ -218,7 +219,7 @@ class NeuralTransferFunction(LightningModule):
         else: raise Exception(f'Invalid parameter backbone: {hparams.backbone}. Use either resnet[18,34,50,101,152] or resnext[50,101]')
         im_feat = self.im_backbone.fc.in_features
         self.im_backbone.fc = Noop()
-    # Output Activation
+        # Output Activation RGB
         if   hparams.last_act_rgb == 'nrelu':     self.rgb_act = NormalizedReLU()
         elif hparams.last_act_rgb == 'relu':      self.rgb_act = F.relu
         elif hparams.last_act_rgb == 'nsrelu':    self.rgb_act = NegativeScaledReLU()
@@ -227,7 +228,7 @@ class NeuralTransferFunction(LightningModule):
         elif hparams.last_act_rgb == 'normalize': self.rgb_act = NormalizeSum()
         elif hparams.last_act_rgb == 'none':      self.rgb_act = Noop()
         else: raise Exception(f'Invalid last activation (color) given ({hparams.last_act_rgb}).')
-
+        # Output Activation Opacity
         if   hparams.last_act_op == 'nrelu':     self.op_act = NormalizedReLU()
         elif hparams.last_act_op == 'relu':      self.op_act = F.relu
         elif hparams.last_act_op == 'nsrelu':    self.op_act = NegativeScaledReLU()
@@ -236,15 +237,15 @@ class NeuralTransferFunction(LightningModule):
         elif hparams.last_act_op == 'normalize': self.op_act = NormalizeSum()
         elif hparams.last_act_op == 'none':      self.op_act = Noop()
         else: raise Exception(f'Invalid last activation (opacity) given ({hparams.last_act_op}).')
-    # Initialize Network
+        # Initialize Network
         self.network = NeuralTF_Texture(im_feat, last_act=Noop, out_res=hparams.tf_res)
-    # Loss Function
+        # Loss Function RGB
         if   hparams.rgb_loss == 'awl': self.rgb_loss = AdaptiveWingLoss()
         elif hparams.rgb_loss == 'mse': self.rgb_loss = WeightedMSELoss()
         elif hparams.rgb_loss == 'mae': self.rgb_loss = WeightedMAELoss()
         elif hparams.rgb_loss == 'emd': self.rgb_loss = EMDLoss()
         else: raise Exception(f'Invalid rgb loss given ({hparams.rgb_loss}). Valid choices are mse, mae and awl')
-
+        # Loss Function Opacity
         if   hparams.op_loss == 'awl': self.op_loss = AdaptiveWingLoss()
         elif hparams.op_loss == 'mse': self.op_loss = WeightedMSELoss()
         elif hparams.op_loss == 'mae': self.op_loss = WeightedMAELoss()
@@ -353,9 +354,10 @@ class NeuralTransferFunction(LightningModule):
         if batch_idx < self.hparams.num_images_logged:
             with torch.no_grad():
                 image_logs = {
-                    'render': render_gt[[0]].detach().cpu().float(),
+                    'render':  render_gt[[0]].detach().cpu().float(),
                     'tf_pred': torch.cat([rgb_pred[[0]], op_pred[[0]] / op_pred[[0]].max()], dim=1).detach().cpu().float(),
-                    'tf_targ': torch.cat([rgb_targ[[0]], op_targ[[0]] / op_targ[[0]].max()], dim=1).detach().cpu().float()
+                    'tf_targ': torch.cat([rgb_targ[[0]], op_targ[[0]] / op_targ[[0]].max()], dim=1).detach().cpu().float(),
+                    'coupling': get_coupling(op_pred[0], op_targ[0], self.op_loss.get_cost(op_pred.size(-1)).to(op_pred.device)).detach().float()
                 }
         else:
             image_logs = {}
@@ -374,11 +376,17 @@ class NeuralTransferFunction(LightningModule):
         renders = torch.cat([o['render'] for o in outputs[:n]], dim=0)
         tf_pred = torch.cat([o['tf_pred'] for o in outputs[:n]], dim=0)
         tf_targ = torch.cat([o['tf_targ'] for o in outputs[:n]], dim=0)
+        couplings = torch.cat([o['coupling'] for o in outputs[:n]], dim=0)
 
         self.log_dict({
             f'figs/val_tf_comp{i}': wandb.Image(
                 fig_to_img(plot_render_2tf(ren, tfp, tft)))
                 for i, ren, tfp, tft in zip(count(), renders, tf_pred, tf_targ)
+        })
+        self.log_dict({
+            f'figs/val_tf_coupl{i}': wandb.Image(
+                fig_to_img(plot_coupling(pred[3], targ[3], coupl)))
+                for i, pred, targ, coupl in zip(count(), tf_pred, tf_targ, couplings)
         })
 
         self.log('val_loss', val_loss)
